@@ -5,13 +5,7 @@ import React from 'react';
 async function LoginPage() {
   await requireUnauth();
 
-  return (
-    <div className="flex items-center justify-center h-screen w-full">
-      <div className="min-w-100">
-        <LoginForm />
-      </div>
-    </div>
-  );
+  return <LoginForm />;
 }
 
 export default LoginPage;
