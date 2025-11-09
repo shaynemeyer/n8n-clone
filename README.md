@@ -8,6 +8,7 @@ A modern workflow automation platform inspired by n8n, built with Next.js 15, Re
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4
 - **UI Components**: shadcn/ui (50+ components, New York style)
 - **Database**: PostgreSQL with Prisma ORM
+- **Authentication**: Better Auth with email/password and OAuth support
 - **API Layer**: tRPC 11.7 for type-safe APIs
 - **State Management**: TanStack React Query (v5)
 - **Forms**: React Hook Form with Zod validation
@@ -38,8 +39,10 @@ npm install
 # Create .env file
 cp .env.example .env
 
-# Add your PostgreSQL connection string
-DATABASE_URL="postgresql://..."
+# Add your database connection and auth secrets
+DATABASE_URL="postgresql://user:password@localhost:5432/n8n_clone"
+BETTER_AUTH_SECRET="your-random-secret-key-here"  # Generate with: openssl rand -base64 32
+BETTER_AUTH_URL="http://localhost:3000"
 ```
 
 4. Set up the database:
@@ -64,28 +67,54 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 ├── app/                    # Next.js App Router
 │   ├── layout.tsx         # Root layout with providers
 │   ├── page.tsx           # Home page (server component)
-│   ├── Client.tsx         # Client component example
-│   └── api/trpc/          # tRPC API endpoints
+│   ├── (auth)/            # Auth pages (login, signup)
+│   ├── features/auth/     # Auth components
+│   ├── api/
+│   │   ├── auth/          # Better Auth API routes
+│   │   └── trpc/          # tRPC API endpoints
+│   └── Client.tsx         # Client component example
 ├── components/
 │   └── ui/                # shadcn/ui components (50+)
 ├── trpc/                  # tRPC setup
 │   ├── routers/           # API route definitions
-│   ├── init.ts            # tRPC initialization
+│   ├── init.ts            # tRPC initialization & protected procedures
 │   ├── client.tsx         # Client-side tRPC
 │   └── server.tsx         # Server-side tRPC
 ├── prisma/
-│   ├── schema.prisma      # Database schema
+│   ├── schema.prisma      # Database schema (User, Session, Account, etc.)
 │   └── migrations/        # Database migrations
 ├── lib/
+│   ├── auth.ts            # Better Auth configuration
+│   ├── auth-client.ts     # Client-side auth
+│   ├── auth-utils.ts      # Auth helpers (requireAuth, requireUnauth)
 │   ├── db.ts              # Prisma client
 │   ├── utils.ts           # Utility functions
 │   └── generated/prisma/  # Generated Prisma client
 ├── hooks/                 # Custom React hooks
 └── docs/                  # Documentation
+    ├── authentication-system.md
     └── data-fetching-pattern.md
 ```
 
 ## Key Features
+
+### Authentication System
+
+Complete authentication solution powered by Better Auth:
+- **Email/Password Authentication** with secure bcrypt hashing
+- **Database-backed Sessions** with automatic expiration
+- **Protected Routes** using server-side middleware
+- **Protected API Endpoints** via tRPC middleware
+- **OAuth Ready** - Placeholder UI for GitHub and Google (easy to enable)
+
+[📖 Read the complete authentication system documentation](./docs/authentication-system.md)
+
+Key features:
+- HTTP-only session cookies (XSS protection)
+- Auto sign-in after registration
+- Server and client-side auth utilities
+- Session management with IP and User Agent tracking
+- Ready for email verification and 2FA
 
 ### Type-Safe Data Fetching
 
@@ -106,9 +135,10 @@ Key benefits:
 ### Database Models
 
 Current Prisma schema includes:
-- **User** - User accounts with email and name
-- **Post** - User-generated posts (1:many with User)
-- **Profile** - User profiles (1:1 with User)
+- **User** - User accounts with email and profile
+- **Session** - Active user sessions with expiration
+- **Account** - Authentication provider accounts (email/password, OAuth)
+- **Verification** - Email verification and password reset tokens
 
 ### UI Components
 
@@ -140,6 +170,7 @@ npx prisma db push           # Push schema without migrations
 
 ## Documentation
 
+- [Authentication System](./docs/authentication-system.md) - Complete guide to Better Auth implementation with login/logout flows, session management, and security
 - [Data Fetching Pattern](./docs/data-fetching-pattern.md) - Comprehensive guide to the tRPC + React Query architecture with diagrams
 - [CLAUDE.md](./CLAUDE.md) - Project instructions for Claude Code
 
@@ -152,6 +183,9 @@ npx prisma db push           # Push schema without migrations
 - ✅ shadcn/ui component library
 - ✅ Type-safe API layer
 - ✅ Server-side rendering with data prefetching
+- ✅ Authentication system with Better Auth
+- ✅ Protected routes and API endpoints
+- ✅ Session management
 
 ### Planned Features
 - [ ] Workflow database models (Workflow, Node, Edge)
@@ -160,7 +194,8 @@ npx prisma db push           # Push schema without migrations
 - [ ] Workflow execution engine
 - [ ] Integration system
 - [ ] Workflow history and logging
-- [ ] Authentication and authorization
+- [ ] OAuth providers (GitHub, Google)
+- [ ] Email verification
 - [ ] Real-time collaboration
 - [ ] Webhook support
 - [ ] Scheduling system
