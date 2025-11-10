@@ -807,6 +807,179 @@ import type { AppRouter } from "./routers/_app";  // Must import!
 
 ---
 
+## Integration with Background Jobs
+
+tRPC procedures are the ideal place to trigger background jobs with Inngest. Since tRPC provides type-safe APIs with authentication middleware, you can safely trigger long-running workflows without blocking the HTTP response.
+
+### Triggering Background Jobs from tRPC
+
+**File:** `trpc/routers/_app.ts`
+
+```typescript
+import { router, protectedProcedure } from "../init";
+import { inngest } from "@/inngest/client";
+import { db } from "@/lib/db";
+import { z } from "zod";
+
+export const appRouter = router({
+  // Synchronous query - returns immediately
+  getWorkflow: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input }) => {
+      return await db.workflow.findUnique({
+        where: { id: input.id },
+      });
+    }),
+
+  // Async mutation - triggers background job
+  executeWorkflow: protectedProcedure
+    .input(z.object({ workflowId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      // 1. Send event to Inngest (non-blocking)
+      await inngest.send({
+        name: 'workflow/execute',
+        data: {
+          workflowId: input.workflowId,
+          userId: ctx.auth.user.id,
+          triggeredAt: new Date().toISOString(),
+        },
+      });
+
+      // 2. Return immediately (don't wait for workflow to complete)
+      return {
+        success: true,
+        message: 'Workflow execution started',
+        workflowId: input.workflowId,
+      };
+    }),
+});
+```
+
+### Pattern: Async Job Status Polling
+
+For long-running jobs, create a status endpoint that the client can poll:
+
+```typescript
+export const appRouter = router({
+  // Start the job
+  startDataProcessing: protectedProcedure
+    .input(z.object({ dataId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      // Create job record
+      const job = await db.job.create({
+        data: {
+          status: 'pending',
+          userId: ctx.auth.user.id,
+          dataId: input.dataId,
+        },
+      });
+
+      // Trigger background job
+      await inngest.send({
+        name: 'data/process',
+        data: { jobId: job.id, dataId: input.dataId },
+      });
+
+      return { jobId: job.id, status: 'pending' };
+    }),
+
+  // Poll for status
+  getJobStatus: protectedProcedure
+    .input(z.object({ jobId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const job = await db.job.findUnique({
+        where: { id: input.jobId, userId: ctx.auth.user.id },
+        include: { result: true },
+      });
+
+      return {
+        status: job?.status,
+        progress: job?.progress,
+        result: job?.result,
+        error: job?.error,
+      };
+    }),
+});
+```
+
+**Client Component:**
+
+```typescript
+"use client";
+
+import { trpc } from "@/trpc/client";
+import { useEffect } from "react";
+
+export function DataProcessor({ dataId }: { dataId: string }) {
+  const startJob = trpc.startDataProcessing.useMutation();
+  const { data: jobStatus, refetch } = trpc.getJobStatus.useQuery(
+    { jobId: startJob.data?.jobId ?? '' },
+    { enabled: !!startJob.data?.jobId, refetchInterval: 2000 } // Poll every 2s
+  );
+
+  const handleProcess = async () => {
+    await startJob.mutateAsync({ dataId });
+  };
+
+  return (
+    <div>
+      <button onClick={handleProcess} disabled={startJob.isPending}>
+        Process Data
+      </button>
+
+      {jobStatus && (
+        <div>
+          Status: {jobStatus.status}
+          {jobStatus.progress && <progress value={jobStatus.progress} max={100} />}
+          {jobStatus.result && <div>Result: {JSON.stringify(jobStatus.result)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### When to Use Background Jobs vs Direct Execution
+
+| Use tRPC Direct | Use Inngest Background Job |
+|----------------|---------------------------|
+| Fast queries (< 1s) | Long-running operations (> 5s) |
+| Simple CRUD operations | Multi-step workflows |
+| User needs immediate response | User can wait for completion |
+| No external API calls | Calls to rate-limited APIs |
+| Single database query | Multiple database operations |
+| No retry logic needed | Automatic retries required |
+
+### Architecture Diagram: tRPC + Inngest Integration
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant tRPC as tRPC Mutation
+    participant Inngest as Inngest Client
+    participant InngestAPI as Inngest Platform
+    participant Worker as Background Function
+    participant DB as Database
+
+    Client->>tRPC: executeWorkflow({ workflowId })
+    tRPC->>Inngest: inngest.send({ name, data })
+    Inngest->>InngestAPI: POST /e/n8n-clone
+    InngestAPI-->>Inngest: Event queued
+    Inngest-->>tRPC: Event ID
+    tRPC-->>Client: { success: true, workflowId }
+
+    Note over Client: User sees confirmation immediately
+
+    InngestAPI->>Worker: Trigger workflow/execute
+    Worker->>DB: Multi-step processing
+    Worker->>DB: Update status
+    Worker-->>InngestAPI: Complete
+
+    Note over Client: Client polls for status via tRPC
+```
+
+---
+
 ## Summary
 
 This data fetching pattern provides:
@@ -816,5 +989,11 @@ This data fetching pattern provides:
 3. **Intelligent Caching** with automatic invalidation
 4. **Optimal Performance** via request deduplication and background refetching
 5. **Excellent DX** with minimal boilerplate
+6. **Async Job Orchestration** by integrating with Inngest for long-running tasks
 
-The combination of tRPC, React Query, and Next.js Server Components creates a powerful, type-safe, and performant data layer for modern applications.
+The combination of tRPC, React Query, Next.js Server Components, and Inngest creates a powerful, type-safe, and performant data layer for modern applications with both synchronous and asynchronous workflows.
+
+## Related Documentation
+
+- [Background Jobs with Inngest](./background-jobs-inngest.md) - Complete guide to Inngest setup and patterns
+- [Authentication System](./authentication-system.md) - For protecting tRPC procedures that trigger jobs

@@ -11,6 +11,7 @@ A modern workflow automation platform inspired by n8n, built with Next.js 15, Re
 - **Authentication**: Better Auth with email/password and OAuth support
 - **API Layer**: tRPC 11.7 for type-safe APIs
 - **State Management**: TanStack React Query (v5)
+- **Background Jobs**: Inngest for reliable workflow orchestration
 - **Forms**: React Hook Form with Zod validation
 - **Icons**: Lucide React
 
@@ -43,6 +44,10 @@ cp .env.example .env
 DATABASE_URL="postgresql://user:password@localhost:5432/n8n_clone"
 BETTER_AUTH_SECRET="your-random-secret-key-here"  # Generate with: openssl rand -base64 32
 BETTER_AUTH_URL="http://localhost:3000"
+
+# Optional: Inngest (only needed for production)
+# INNGEST_EVENT_KEY="your-inngest-event-key"
+# INNGEST_SIGNING_KEY="your-inngest-signing-key"
 ```
 
 4. Set up the database:
@@ -56,10 +61,16 @@ npx prisma studio
 
 5. Run the development server:
 ```bash
+# Terminal 1: Start Next.js
 npm run dev
+
+# Terminal 2 (Optional): Start Inngest Dev Server for background jobs
+npx inngest-cli dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+For background jobs, the Inngest Dev Server runs at [http://localhost:8288](http://localhost:8288).
 
 ## Project Structure
 
@@ -71,6 +82,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 │   ├── features/auth/     # Auth components
 │   ├── api/
 │   │   ├── auth/          # Better Auth API routes
+│   │   ├── inngest/       # Inngest webhook endpoint
 │   │   └── trpc/          # tRPC API endpoints
 │   └── Client.tsx         # Client component example
 ├── components/
@@ -80,8 +92,11 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 │   ├── init.ts            # tRPC initialization & protected procedures
 │   ├── client.tsx         # Client-side tRPC
 │   └── server.tsx         # Server-side tRPC
+├── inngest/               # Background jobs
+│   ├── client.ts          # Inngest client instance
+│   └── functions.ts       # Background job function definitions
 ├── prisma/
-│   ├── schema.prisma      # Database schema (User, Session, Account, etc.)
+│   ├── schema.prisma      # Database schema (User, Session, Account, Workflow)
 │   └── migrations/        # Database migrations
 ├── lib/
 │   ├── auth.ts            # Better Auth configuration
@@ -93,7 +108,9 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 ├── hooks/                 # Custom React hooks
 └── docs/                  # Documentation
     ├── authentication-system.md
-    └── data-fetching-pattern.md
+    ├── data-fetching-pattern.md
+    ├── styling-and-theming-system.md
+    └── background-jobs-inngest.md
 ```
 
 ## Key Features
@@ -132,6 +149,24 @@ Key benefits:
 - Request deduplication
 - Background data synchronization
 
+### Background Jobs with Inngest
+
+Reliable workflow orchestration powered by Inngest:
+- **Step Functions** with automatic retries and error handling
+- **Event-Driven Architecture** for decoupled systems
+- **Type-Safe** integration with tRPC
+- **Durable Execution** that survives server restarts
+- **Built-in Observability** with the Inngest Dev Server
+
+[📖 Read the complete Inngest documentation](./docs/background-jobs-inngest.md)
+
+Key features:
+- Multi-step workflows with `step.run()`, `step.sleep()`, and more
+- Automatic retry logic with exponential backoff
+- Job status polling via tRPC queries
+- Local development with visual debugging UI
+- Production-ready with webhook-based execution
+
 ### Database Models
 
 Current Prisma schema includes:
@@ -139,6 +174,7 @@ Current Prisma schema includes:
 - **Session** - Active user sessions with expiration
 - **Account** - Authentication provider accounts (email/password, OAuth)
 - **Verification** - Email verification and password reset tokens
+- **Workflow** - Workflow definitions (created via Inngest background jobs)
 
 ### UI Components
 
@@ -168,10 +204,17 @@ npx prisma studio            # Open database GUI
 npx prisma db push           # Push schema without migrations
 ```
 
+### Background Jobs
+```bash
+npx inngest-cli dev          # Start Inngest Dev Server at http://localhost:8288
+```
+
 ## Documentation
 
 - [Authentication System](./docs/authentication-system.md) - Complete guide to Better Auth implementation with login/logout flows, session management, and security
-- [Data Fetching Pattern](./docs/data-fetching-pattern.md) - Comprehensive guide to the tRPC + React Query architecture with diagrams
+- [Data Fetching Pattern](./docs/data-fetching-pattern.md) - Comprehensive guide to the tRPC + React Query architecture with diagrams and Inngest integration
+- [Background Jobs with Inngest](./docs/background-jobs-inngest.md) - Complete guide to setting up and using Inngest for reliable background job orchestration
+- [Styling and Theming System](./docs/styling-and-theming-system.md) - Guide to Tailwind CSS v4 and theming
 - [CLAUDE.md](./CLAUDE.md) - Project instructions for Claude Code
 
 ## Roadmap
@@ -186,19 +229,21 @@ npx prisma db push           # Push schema without migrations
 - ✅ Authentication system with Better Auth
 - ✅ Protected routes and API endpoints
 - ✅ Session management
+- ✅ Background jobs with Inngest
+- ✅ Workflow database model
 
 ### Planned Features
-- [ ] Workflow database models (Workflow, Node, Edge)
+- [ ] Extended workflow database models (Node, Edge, Execution)
 - [ ] Workflow builder UI (drag-and-drop canvas)
 - [ ] Node system (triggers, actions, conditions)
-- [ ] Workflow execution engine
-- [ ] Integration system
+- [ ] Workflow execution engine (via Inngest)
+- [ ] Integration system (API connectors)
 - [ ] Workflow history and logging
 - [ ] OAuth providers (GitHub, Google)
 - [ ] Email verification
 - [ ] Real-time collaboration
 - [ ] Webhook support
-- [ ] Scheduling system
+- [ ] Scheduling system (cron jobs via Inngest)
 
 ## Learn More
 
@@ -207,6 +252,8 @@ npx prisma db push           # Push schema without migrations
 - [Prisma Documentation](https://www.prisma.io/docs)
 - [shadcn/ui](https://ui.shadcn.com)
 - [TanStack Query](https://tanstack.com/query)
+- [Inngest Documentation](https://www.inngest.com/docs)
+- [Better Auth Documentation](https://www.better-auth.com/docs)
 
 ## License
 
