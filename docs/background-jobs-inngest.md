@@ -80,14 +80,21 @@ The client ID (`n8n-clone`) uniquely identifies your application in the Inngest 
 Functions are defined using the `inngest.createFunction()` method:
 
 ```typescript
-import prisma from '@/lib/db';
+import { generateText } from 'ai';
 import { inngest } from './client';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
 
-export const helloWorld = inngest.createFunction(
-  { id: 'hello-world' },
-  { event: 'test/hello.world' },
+const google = createGoogleGenerativeAI();
+const openai = createOpenAI();
+const anthropic = createAnthropic();
+
+export const execute = inngest.createFunction(
+  { id: 'execute-ai' },
+  { event: 'execute/ai' },
   async ({ event, step }) => {
-    // Function implementation
+    // Function implementation with AI SDK integration
   }
 );
 ```
@@ -101,30 +108,35 @@ This Next.js API route serves as the webhook endpoint for Inngest:
 ```typescript
 import { serve } from 'inngest/next';
 import { inngest } from '@/inngest/client';
+import { execute } from '@/inngest/functions';
 
 // Create an API that serves functions
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [
-    /* your functions will be passed here later! */
-  ],
+  functions: [execute],
 });
 ```
 
-**Note**: Functions need to be registered in the `functions` array for them to be active.
+**Note**: All functions must be imported and registered in the `functions` array for them to be active.
 
 ### 4. Dependencies
 
 ```json
 {
   "dependencies": {
-    "inngest": "^3.45.0"
+    "inngest": "^3.45.0",
+    "ai": "^5.0.90",
+    "@ai-sdk/google": "^2.0.30",
+    "@ai-sdk/openai": "^2.0.64",
+    "@ai-sdk/anthropic": "^2.0.43"
   },
   "devDependencies": {
     "inngest-cli": "^1.13.4"
   }
 }
 ```
+
+**AI SDK Integration**: This project integrates Inngest with Vercel AI SDK for AI model orchestration using `step.ai.wrap()`.
 
 ## How It Works
 
@@ -139,20 +151,18 @@ sequenceDiagram
     participant Fn as Background Function
     participant DB as Database
 
-    App->>Client: inngest.send({ name: 'test/hello.world', data: {...} })
+    App->>Client: inngest.send({ name: 'execute/ai', data: {...} })
     Client->>Cloud: POST /e/n8n-clone (Send Event)
     Cloud->>Cloud: Queue Event
     Cloud->>API: POST /api/inngest (Trigger Function)
-    API->>Fn: Execute hello-world function
-    Fn->>Fn: step.sleep('fetching', '3s')
-    Note over Fn: Wait 3 seconds
-    Fn->>Fn: step.sleep('transcribing', '3s')
-    Note over Fn: Wait 3 seconds
-    Fn->>Fn: step.sleep('sending-to-ai', '3s')
-    Note over Fn: Wait 3 seconds
-    Fn->>DB: step.run('create-workflow', ...)
-    DB-->>Fn: Workflow created
-    Fn-->>API: Function complete
+    API->>Fn: Execute execute-ai function
+    Fn->>Fn: step.ai.wrap('gemini-generate-text', ...)
+    Note over Fn: Call Gemini AI
+    Fn->>Fn: step.ai.wrap('openai-generate-text', ...)
+    Note over Fn: Call OpenAI
+    Fn->>Fn: step.ai.wrap('anthropic-generate-text', ...)
+    Note over Fn: Call Anthropic
+    Fn-->>API: Return AI responses
     API-->>Cloud: 200 OK
     Cloud->>Cloud: Mark event processed
 ```
@@ -172,17 +182,17 @@ sequenceDiagram
 ### Example Function Structure
 
 ```typescript
-export const helloWorld = inngest.createFunction(
+export const execute = inngest.createFunction(
   // 1. Function Configuration
   {
-    id: 'hello-world',
-    name: 'Hello World Function',
+    id: 'execute-ai',
+    name: 'Execute AI Function',
     retries: 3  // Optional: number of retry attempts
   },
 
   // 2. Event Trigger
   {
-    event: 'test/hello.world'  // Event name to listen for
+    event: 'execute/ai'  // Event name to listen for
   },
 
   // 3. Function Handler
@@ -190,19 +200,42 @@ export const helloWorld = inngest.createFunction(
     // event.data contains the payload sent with the event
     // step provides methods for creating retriable steps
 
-    // Sleep steps (for delays)
-    await step.sleep('fetching', '3s');
-    await step.sleep('transcribing', '3s');
-    await step.sleep('sending-to-ai', '3s');
+    // AI steps (for AI model calls with automatic tracking)
+    const { steps: geminiSteps } = await step.ai.wrap(
+      'gemini-generate-text',
+      generateText,
+      {
+        model: google('gemini-2.5-flash'),
+        system: 'You are a helpful assistant.',
+        prompt: 'What is 2 + 2?',
+      }
+    );
 
-    // Run steps (for operations)
-    await step.run('create-workflow', () => {
-      return prisma.workflow.create({
-        data: {
-          name: 'workflow-from-inngest',
-        },
-      });
-    });
+    const { steps: openaiSteps } = await step.ai.wrap(
+      'openai-generate-text',
+      generateText,
+      {
+        model: openai('gpt-4'),
+        system: 'You are a helpful assistant.',
+        prompt: 'What is 2 + 2?',
+      }
+    );
+
+    const { steps: anthropicSteps } = await step.ai.wrap(
+      'anthropic-generate-text',
+      generateText,
+      {
+        model: anthropic('claude-sonnet-4-5'),
+        system: 'You are a helpful assistant.',
+        prompt: 'What is 2 + 2?',
+      }
+    );
+
+    return {
+      geminiSteps,
+      openaiSteps,
+      anthropicSteps,
+    };
   }
 );
 ```
@@ -242,11 +275,11 @@ import { inngest } from '@/inngest/client';
 
 // In a tRPC procedure, API route, or server action
 await inngest.send({
-  name: 'test/hello.world',
+  name: 'execute/ai',
   data: {
-    workflowId: '123',
+    prompt: 'What is the capital of France?',
     userId: 'user_456',
-    payload: { /* custom data */ }
+    context: { /* custom data */ }
   }
 });
 ```
@@ -259,7 +292,7 @@ Use a hierarchical naming structure:
 - `workflow/executed`
 - `workflow/failed`
 - `user/signup`
-- `test/hello.world`
+- `execute/ai`
 
 ### Multiple Events
 
@@ -296,7 +329,32 @@ console.log(result.id);
 
 **Use cases**: Database operations, API calls, computations
 
-#### 2. `step.sleep()` - Add Delays
+#### 1b. `step.ai.wrap()` - Execute AI Model Calls
+
+```typescript
+const { steps } = await step.ai.wrap(
+  'ai-call-name',
+  generateText,  // or streamText, generateObject, etc.
+  {
+    model: google('gemini-2.5-flash'),
+    system: 'You are a helpful assistant.',
+    prompt: event.data.prompt,
+  }
+);
+
+// Access AI response
+console.log(steps);
+```
+
+**Use cases**: AI model inference, text generation, embeddings, structured output generation
+
+**Benefits**:
+- Automatic token usage tracking in Inngest dashboard
+- Automatic cost estimation
+- Detailed AI call observability
+- Works with any Vercel AI SDK provider (OpenAI, Anthropic, Google, etc.)
+
+#### 2. `step.sleep()` - Add Delays (Deprecated in favor of `step.sleepUntil()` and `step.waitForEvent()`)
 
 ```typescript
 await step.sleep('wait-for-processing', '5m');
@@ -379,9 +437,9 @@ The Inngest Dev Server:
 3. Send a test event:
    ```json
    {
-     "name": "test/hello.world",
+     "name": "execute/ai",
      "data": {
-       "workflowId": "test-123"
+       "prompt": "What is 2 + 2?"
      }
    }
    ```
@@ -392,14 +450,16 @@ The Inngest Dev Server:
 // In a tRPC procedure or API route
 import { inngest } from '@/inngest/client';
 
-export const testRouter = createTRPCRouter({
-  triggerJob: protectedProcedure.mutation(async () => {
-    await inngest.send({
-      name: 'test/hello.world',
-      data: { test: true }
-    });
-    return { success: true };
-  })
+export const aiRouter = createTRPCRouter({
+  executeAI: protectedProcedure
+    .input(z.object({ prompt: z.string() }))
+    .mutation(async ({ input }) => {
+      await inngest.send({
+        name: 'execute/ai',
+        data: { prompt: input.prompt }
+      });
+      return { success: true };
+    })
 });
 ```
 
@@ -411,12 +471,12 @@ To activate a function, add it to the API route:
 // app/api/inngest/route.ts
 import { serve } from 'inngest/next';
 import { inngest } from '@/inngest/client';
-import { helloWorld } from '@/inngest/functions';  // Import your function
+import { execute } from '@/inngest/functions';  // Import your function
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [
-    helloWorld,  // Register your function
+    execute,  // Register your function
     // Add more functions here
   ],
 });
@@ -450,6 +510,7 @@ When deploying to production:
 'workflow/created'
 'workflow/node/executed'
 'user/email/sent'
+'execute/ai'
 
 // Avoid
 'created'
@@ -606,40 +667,226 @@ export const rateLimitedJob = inngest.createFunction(
 ## Current Implementation Status
 
 ### Configured Components
-- Inngest client initialized with ID `n8n-clone`
-- Example function `helloWorld` defined in `inngest/functions.ts`
-- API route handler set up at `/api/inngest`
+- ✅ Inngest client initialized with ID `n8n-clone`
+- ✅ AI execution function `execute` defined in `inngest/functions.ts`
+- ✅ Function registered in API route handler at `/api/inngest`
+- ✅ AI SDK integration with Google Gemini, OpenAI, and Anthropic
+- ✅ `step.ai.wrap()` for AI model orchestration
 
-### To Complete Setup
-1. **Register functions** in `app/api/inngest/route.ts`:
-   ```typescript
-   import { helloWorld } from '@/inngest/functions';
+### Implementation Details
 
-   export const { GET, POST, PUT } = serve({
-     client: inngest,
-     functions: [helloWorld],  // Add your functions here
-   });
-   ```
+The `execute` function demonstrates:
+- **Multi-provider AI calls**: Google Gemini, OpenAI GPT-4, and Anthropic Claude
+- **AI tracking**: Automatic token usage and cost tracking with `step.ai.wrap()`
+- **Parallel AI execution**: Multiple AI models called within a single function
+- **Type-safe AI responses**: Structured return values from AI providers
 
-2. **Start Inngest Dev Server** for local development:
+### Ready to Use
+
+1. **Start Inngest Dev Server** for local development:
    ```bash
    npx inngest-cli@latest dev
    ```
 
-3. **Send test events** to trigger functions:
+2. **Send events** to trigger the AI execution:
    ```typescript
    await inngest.send({
-     name: 'test/hello.world',
-     data: { test: true }
+     name: 'execute/ai',
+     data: { prompt: 'Your prompt here' }
    });
+   ```
+
+3. **Monitor execution** in the Inngest dashboard at `http://localhost:8288`
+
+## AI SDK Integration with Inngest
+
+### Overview
+
+This project integrates Inngest's `step.ai.wrap()` feature with Vercel AI SDK to provide automatic tracking and observability for AI model calls.
+
+### Benefits of `step.ai.wrap()`
+
+1. **Automatic Token Tracking**: Every AI call's token usage is automatically tracked
+2. **Cost Estimation**: Approximate costs calculated based on model pricing
+3. **Detailed Observability**: View AI call details in Inngest dashboard
+4. **Provider Agnostic**: Works with any Vercel AI SDK provider
+5. **Error Handling**: Automatic retries for AI API failures
+6. **Performance Metrics**: Track latency and response times
+
+### Supported Providers
+
+The current implementation includes:
+- **Google Gemini** (`@ai-sdk/google`): `gemini-2.5-flash`
+- **OpenAI** (`@ai-sdk/openai`): `gpt-4`, `gpt-3.5-turbo`, etc.
+- **Anthropic** (`@ai-sdk/anthropic`): `claude-sonnet-4-5`, `claude-opus-4`, etc.
+
+### Environment Variables Required
+
+```env
+# Google AI
+GOOGLE_GENERATIVE_AI_API_KEY=your_google_api_key
+
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+
+# Anthropic
+ANTHROPIC_API_KEY=your_anthropic_api_key
+```
+
+### Example Usage Patterns
+
+#### Single AI Call
+```typescript
+export const generateContent = inngest.createFunction(
+  { id: 'generate-content' },
+  { event: 'content/generate' },
+  async ({ event, step }) => {
+    const { text } = await step.ai.wrap(
+      'generate-text',
+      generateText,
+      {
+        model: openai('gpt-4'),
+        system: 'You are a content writer.',
+        prompt: event.data.prompt,
+      }
+    );
+    return { content: text };
+  }
+);
+```
+
+#### Structured Output
+```typescript
+import { generateObject } from 'ai';
+import { z } from 'zod';
+
+export const extractData = inngest.createFunction(
+  { id: 'extract-data' },
+  { event: 'data/extract' },
+  async ({ event, step }) => {
+    const { object } = await step.ai.wrap(
+      'extract-structured-data',
+      generateObject,
+      {
+        model: anthropic('claude-sonnet-4-5'),
+        schema: z.object({
+          name: z.string(),
+          email: z.string(),
+          age: z.number(),
+        }),
+        prompt: event.data.text,
+      }
+    );
+    return object;
+  }
+);
+```
+
+#### Streaming (Note: Requires special handling)
+```typescript
+import { streamText } from 'ai';
+
+export const streamResponse = inngest.createFunction(
+  { id: 'stream-response' },
+  { event: 'response/stream' },
+  async ({ event, step }) => {
+    // Note: Streaming is captured as a complete response in step.ai.wrap()
+    const result = await step.ai.wrap(
+      'stream-text',
+      streamText,
+      {
+        model: google('gemini-2.5-flash'),
+        prompt: event.data.prompt,
+      }
+    );
+
+    // The result contains the full streamed output
+    return result;
+  }
+);
+```
+
+### Viewing AI Metrics in Inngest Dashboard
+
+When you run functions with `step.ai.wrap()`, the Inngest Dev Server (`http://localhost:8288`) displays:
+
+1. **Token Usage**: Input tokens, output tokens, total tokens
+2. **Model Information**: Provider and model name
+3. **Latency**: Time taken for AI API call
+4. **Cost Estimate**: Approximate cost based on model pricing
+5. **Step Timeline**: Visual representation of AI call duration
+
+### Best Practices for AI Steps
+
+1. **Use Descriptive Step Names**: Include model name and purpose
+   ```typescript
+   await step.ai.wrap('gpt4-summarize-article', ...)
+   await step.ai.wrap('claude-extract-entities', ...)
+   ```
+
+2. **Handle Model-Specific Errors**:
+   ```typescript
+   await step.ai.wrap('ai-call', async () => {
+     try {
+       return await generateText({ ... });
+     } catch (error) {
+       if (error.message.includes('rate limit')) {
+         // Let Inngest retry with backoff
+         throw error;
+       }
+       // Handle non-retriable errors
+       return { error: 'Model unavailable', fallback: true };
+     }
+   });
+   ```
+
+3. **Use Dynamic Prompts from Event Data**:
+   ```typescript
+   const { text } = await step.ai.wrap('generate', generateText, {
+     model: openai('gpt-4'),
+     system: event.data.systemPrompt || 'You are a helpful assistant.',
+     prompt: event.data.userPrompt,
+   });
+   ```
+
+4. **Chain AI Calls with Step Results**:
+   ```typescript
+   const summary = await step.ai.wrap('summarize', generateText, {
+     model: openai('gpt-4'),
+     prompt: `Summarize: ${event.data.text}`,
+   });
+
+   const keywords = await step.ai.wrap('extract-keywords', generateText, {
+     model: google('gemini-2.5-flash'),
+     prompt: `Extract keywords from: ${summary.text}`,
+   });
+
+   return { summary: summary.text, keywords: keywords.text };
+   ```
+
+5. **Set Appropriate Timeouts for AI Calls**:
+   ```typescript
+   export const longAIJob = inngest.createFunction(
+     {
+       id: 'long-ai-job',
+       timeout: '5m'  // AI calls can take time
+     },
+     { event: 'ai/long-job' },
+     async ({ event, step }) => {
+       // Your AI processing
+     }
+   );
    ```
 
 ## Additional Resources
 
 - [Inngest Documentation](https://www.inngest.com/docs)
+- [Inngest AI Observability](https://www.inngest.com/docs/guides/ai-observability)
 - [Inngest TypeScript SDK](https://www.inngest.com/docs/reference/typescript)
 - [Next.js Integration Guide](https://www.inngest.com/docs/sdk/serve#framework-next-js)
 - [Step Functions Guide](https://www.inngest.com/docs/guides/step-functions)
+- [Vercel AI SDK Documentation](https://sdk.vercel.ai/docs)
+- [AI SDK Providers](https://sdk.vercel.ai/providers/ai-sdk-providers)
 
 ## Related Documentation
 

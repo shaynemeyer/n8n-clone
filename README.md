@@ -12,6 +12,7 @@ A modern workflow automation platform inspired by n8n, built with Next.js 15, Re
 - **API Layer**: tRPC 11.7 for type-safe APIs
 - **State Management**: TanStack React Query (v5)
 - **Background Jobs**: Inngest for reliable workflow orchestration
+- **AI Integration**: Vercel AI SDK with Google Gemini, OpenAI, and Anthropic
 - **Forms**: React Hook Form with Zod validation
 - **Icons**: Lucide React
 
@@ -48,6 +49,11 @@ BETTER_AUTH_URL="http://localhost:3000"
 # Optional: Inngest (only needed for production)
 # INNGEST_EVENT_KEY="your-inngest-event-key"
 # INNGEST_SIGNING_KEY="your-inngest-signing-key"
+
+# Optional: AI Provider API Keys (for background job AI integration)
+# GOOGLE_GENERATIVE_AI_API_KEY="your-google-api-key"
+# OPENAI_API_KEY="your-openai-api-key"
+# ANTHROPIC_API_KEY="your-anthropic-api-key"
 ```
 
 4. Set up the database:
@@ -151,8 +157,10 @@ Key benefits:
 
 ### Background Jobs with Inngest
 
-Reliable workflow orchestration powered by Inngest:
+Reliable workflow orchestration powered by Inngest with AI SDK integration:
 - **Step Functions** with automatic retries and error handling
+- **AI Observability** via `step.ai.wrap()` for tracking token usage and costs
+- **Multi-Provider AI** support (Google Gemini, OpenAI, Anthropic)
 - **Event-Driven Architecture** for decoupled systems
 - **Type-Safe** integration with tRPC
 - **Durable Execution** that survives server restarts
@@ -161,10 +169,11 @@ Reliable workflow orchestration powered by Inngest:
 [📖 Read the complete Inngest documentation](./docs/background-jobs-inngest.md)
 
 Key features:
-- Multi-step workflows with `step.run()`, `step.sleep()`, and more
+- Multi-step workflows with `step.run()`, `step.ai.wrap()`, and more
+- AI model orchestration with automatic token tracking and cost estimation
 - Automatic retry logic with exponential backoff
 - Job status polling via tRPC queries
-- Local development with visual debugging UI
+- Local development with visual debugging UI at http://localhost:8288
 - Production-ready with webhook-based execution
 
 ### Database Models
@@ -230,6 +239,8 @@ npx inngest-cli dev          # Start Inngest Dev Server at http://localhost:8288
 - ✅ Protected routes and API endpoints
 - ✅ Session management
 - ✅ Background jobs with Inngest
+- ✅ AI SDK integration with Inngest (`step.ai.wrap()`)
+- ✅ Multi-provider AI support (Google, OpenAI, Anthropic)
 - ✅ Workflow database model
 
 ### Planned Features
@@ -253,6 +264,8 @@ npx inngest-cli dev          # Start Inngest Dev Server at http://localhost:8288
 - [shadcn/ui](https://ui.shadcn.com)
 - [TanStack Query](https://tanstack.com/query)
 - [Inngest Documentation](https://www.inngest.com/docs)
+- [Inngest AI Observability](https://www.inngest.com/docs/guides/ai-observability)
+- [Vercel AI SDK Documentation](https://sdk.vercel.ai/docs)
 - [Better Auth Documentation](https://www.better-auth.com/docs)
 
 ## License
