@@ -1,8 +1,13 @@
 'use client';
 
 import React from 'react';
-import { useSuspenseWorkflows } from '../hooks/use-workflows';
+import {
+  useCreateWorkflow,
+  useSuspenseWorkflows,
+} from '../hooks/use-workflows';
 import { EntityContainer, EntityHeader } from '@/components/entity-components';
+import { useRouter } from 'next/navigation';
+import { useUpgradeModal } from '@/hooks/use-upgrade-modal';
 
 export function WorkflowsList() {
   const workflows = useSuspenseWorkflows();
@@ -15,15 +20,30 @@ export function WorkflowsList() {
 }
 
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
+  const createWorkflow = useCreateWorkflow();
+  const router = useRouter();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+      onError: (error) => {
+        handleError(error);
+      },
+    });
+  };
   return (
     <>
+      {modal}
       <EntityHeader
         title="Workflows"
         description="Create and manage your workflows"
-        onNew={() => {}}
+        onNew={handleCreate}
         newButtonLabel="New workflow"
         disabled={disabled}
-        isCreating={false}
+        isCreating={createWorkflow.isPending}
       />
     </>
   );
