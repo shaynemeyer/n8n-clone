@@ -74,7 +74,11 @@ graph TB
 | **tRPC Router** | `app/features/workflows/server/routers.ts` | Type-safe API endpoints |
 | **Custom Hook** | `app/features/workflows/hooks/use-workflows.ts` | Client-side data fetching |
 | **Prefetch Helper** | `app/features/workflows/server/prefetch.ts` | Server-side data preloading |
-| **List Component** | `app/features/workflows/components/workflows.tsx` | UI rendering |
+| **WorkflowsList** | `app/features/workflows/components/workflows.tsx` | Main list component |
+| **WorkflowsHeader** | `app/features/workflows/components/workflows.tsx` | Header with EntityHeader |
+| **WorkflowsContainer** | `app/features/workflows/components/workflows.tsx` | Layout with EntityContainer |
+| **EntityHeader** | `components/entity-components.tsx` | Generic reusable header component |
+| **EntityContainer** | `components/entity-components.tsx` | Generic reusable layout wrapper |
 | **Page Component** | `app/(dashboard)/(home)/workflows/page.tsx` | Next.js page with SSR |
 
 ---
@@ -157,12 +161,15 @@ The workflows feature follows the feature-based organization pattern:
 ```
 app/features/workflows/
 ├── components/
-│   └── workflows.tsx          # WorkflowsList component (client)
+│   └── workflows.tsx          # WorkflowsList, WorkflowsHeader, WorkflowsContainer
 ├── hooks/
 │   └── use-workflows.ts       # useSuspenseWorkflows hook
 └── server/
     ├── routers.ts             # workflowsRouter with CRUD operations
     └── prefetch.ts            # Server-side prefetch helper
+
+components/
+└── entity-components.tsx      # Generic EntityHeader and EntityContainer
 
 app/(dashboard)/(home)/workflows/
 └── page.tsx                   # Workflows page with SSR
@@ -335,6 +342,106 @@ graph TB
 
 ## Client Components
 
+### Generic Entity Components
+
+**File:** `components/entity-components.tsx`
+
+The application includes reusable generic components for entity management pages:
+
+```typescript
+import { PlusIcon } from 'lucide-react';
+import { Button } from './ui/button';
+import Link from 'next/link';
+
+type EntityHeaderProps = {
+  title: string;
+  description?: string;
+  newButtonLabel?: string;
+  disabled?: boolean;
+  isCreating?: boolean;
+} & (
+  | { onNew: () => void; newButtonHref?: never }
+  | { newButtonHref: string; onNew?: never }
+  | { onNew?: never; newButtonHref?: never }
+);
+
+export function EntityHeader({
+  title,
+  description,
+  onNew,
+  newButtonHref,
+  newButtonLabel,
+  disabled,
+  isCreating,
+}: EntityHeaderProps) {
+  return (
+    <div className="flex flex-row items-center justify-between gap-x-4">
+      <div className="flex flex-col">
+        <h1 className="text-lg md:text-xl font-semibold">{title}</h1>
+        {description && (
+          <p className="text-xs md:text-sm text-muted-foreground">
+            {description}
+          </p>
+        )}
+      </div>
+      {onNew && !newButtonHref && (
+        <Button disabled={isCreating || disabled} size="sm" onClick={onNew}>
+          <PlusIcon className="size-4" />
+          {newButtonLabel}
+        </Button>
+      )}
+      {newButtonHref && !onNew && (
+        <Button asChild size="sm">
+          <Link href={newButtonHref} prefetch>
+            <PlusIcon className="size-4" />
+            {newButtonLabel}
+          </Link>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+type EntityContainerProps = {
+  children: React.ReactNode;
+  header?: React.ReactNode;
+  search?: React.ReactNode;
+  pagination?: React.ReactNode;
+};
+
+export function EntityContainer({
+  children,
+  header,
+  search,
+  pagination,
+}: EntityContainerProps) {
+  return (
+    <div className="p-4 md:px-10 md:py-6 h-full">
+      <div className="mx-auto max-x-screen-xl w-full flex flex-col gap-y-8 h-full">
+        {header}
+        <div className="flex flex-col gap-y-4 h-full">
+          {search}
+          {children}
+        </div>
+        {pagination}
+      </div>
+    </div>
+  );
+}
+```
+
+**Key Features:**
+
+- **EntityHeader**: Displays page title, description, and optional "New" button
+  - Uses discriminated union types for type-safe button handling
+  - Supports both `onNew` callback and `newButtonHref` navigation
+  - Responsive design with mobile-optimized text sizes
+
+- **EntityContainer**: Provides consistent layout wrapper
+  - Sections for header, search, pagination, and main content
+  - Responsive padding and max-width constraints
+  - Enables consistent UI patterns across all entity pages
+
 ### Custom Hook: useSuspenseWorkflows
 
 **File:** `app/features/workflows/hooks/use-workflows.ts`
@@ -353,24 +460,58 @@ export const useSuspenseWorkflows = () => {
 };
 ```
 
-### List Component
+### Workflows Components
 
 **File:** `app/features/workflows/components/workflows.tsx`
+
+The workflows feature exports three composable components:
 
 ```typescript
 'use client';
 
 import React from 'react';
 import { useSuspenseWorkflows } from '../hooks/use-workflows';
+import { EntityContainer, EntityHeader } from '@/components/entity-components';
+import { api } from '@/trpc/client';
 
-function WorkflowsList() {
+// Main list component - displays workflow cards
+export function WorkflowsList() {
   const workflows = useSuspenseWorkflows();
 
   return <p>{JSON.stringify(workflows.data, null, 2)}</p>;
 }
 
-export default WorkflowsList;
+// Header component with create button
+export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
+  const createWorkflow = api.workflows.create.useMutation();
+
+  return (
+    <EntityHeader
+      title="Workflows"
+      description="Manage your workflow automations"
+      newButtonLabel="New Workflow"
+      onNew={() => createWorkflow.mutate()}
+      disabled={disabled}
+      isCreating={createWorkflow.isPending}
+    />
+  );
+}
+
+// Container component wrapping the entire page layout
+export function WorkflowsContainer({ children }: { children: React.ReactNode }) {
+  return (
+    <EntityContainer header={<WorkflowsHeader />}>
+      {children}
+    </EntityContainer>
+  );
+}
 ```
+
+**Component Responsibilities:**
+
+- **WorkflowsList**: Displays the list of workflows (data presentation layer)
+- **WorkflowsHeader**: Provides title, description, and "New Workflow" button using EntityHeader
+- **WorkflowsContainer**: Wraps the entire page with consistent layout using EntityContainer
 
 ### Component Lifecycle
 
@@ -427,7 +568,10 @@ import { requireAuth } from '@/lib/auth-utils';
 import { HydrateClient } from '@/trpc/server';
 import { ErrorBoundary } from 'react-error-boundary';
 import React, { Suspense } from 'react';
-import WorkflowsList from '@/app/features/workflows/components/workflows';
+import {
+  WorkflowsList,
+  WorkflowsContainer,
+} from '@/app/features/workflows/components/workflows';
 
 async function WorkflowsPage() {
   await requireAuth();
@@ -435,18 +579,32 @@ async function WorkflowsPage() {
   prefetchWorkflows();
 
   return (
-    <HydrateClient>
-      <ErrorBoundary fallback={<p>Error!</p>}>
-        <Suspense fallback={<p>Loading...</p>}>
-          <WorkflowsList />
-        </Suspense>
-      </ErrorBoundary>
-    </HydrateClient>
+    <WorkflowsContainer>
+      <HydrateClient>
+        <ErrorBoundary fallback={<p>Error!</p>}>
+          <Suspense fallback={<p>Loading...</p>}>
+            <WorkflowsList />
+          </Suspense>
+        </ErrorBoundary>
+      </HydrateClient>
+    </WorkflowsContainer>
   );
 }
 
 export default WorkflowsPage;
 ```
+
+**Page Component Structure:**
+
+The page demonstrates the component composition pattern:
+
+1. **WorkflowsContainer** (outermost): Wraps the entire page with consistent layout and header
+2. **HydrateClient**: Provides React Query hydration for SSR data
+3. **ErrorBoundary**: Catches and displays errors gracefully
+4. **Suspense**: Handles loading states during client-side navigation
+5. **WorkflowsList** (innermost): Renders the actual workflow cards
+
+This layered approach ensures proper data hydration, error handling, and loading states while maintaining a consistent layout.
 
 ### Prefetch Flow Diagram
 
