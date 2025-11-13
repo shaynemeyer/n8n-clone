@@ -42,7 +42,7 @@ npx inngest-cli dev          # Start Inngest Dev Server (runs on http://localhos
 - **Database**: PostgreSQL with Prisma ORM
 - **Authentication**: Better Auth with email/password and session management
 - **API Layer**: tRPC 11.7 for type-safe APIs
-- **State Management**: TanStack React Query (v5)
+- **State Management**: TanStack React Query (v5) with nuqs for URL state management
 - **Background Jobs**: Inngest for reliable workflow orchestration
 - **AI Integration**: Vercel AI SDK with Google Gemini, OpenAI, and Anthropic
 - **Forms**: React Hook Form with Zod validation
@@ -73,7 +73,8 @@ app/                      # Next.js App Router pages and layouts
 components/
 ├── app-header.tsx       # Dashboard header with SidebarTrigger
 ├── app-sidebar.tsx      # Main application sidebar with navigation
-├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer)
+├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer, EntitySearch, EntityPagination)
+├── upgrade-modal.tsx    # Upgrade to Pro modal component
 └── ui/                  # shadcn/ui components (50+ components)
 
 lib/
@@ -96,11 +97,16 @@ inngest/
 └── functions.ts    # Background job function definitions
 
 hooks/
-└── use-mobile.ts   # Custom React hooks
+├── use-mobile.ts         # Mobile breakpoint detection hook
+├── use-entity-search.tsx # Generic search hook with debouncing
+└── use-upgrade-modal.tsx # Upgrade modal hook with error detection
 
 prisma/
 ├── schema.prisma   # Database schema (User, Session, Account, Verification, Workflow)
 └── migrations/     # Database migrations
+
+config/
+└── constants.ts    # Application constants (pagination defaults)
 
 docs/
 ├── authentication-system.md        # Complete auth documentation
@@ -109,7 +115,8 @@ docs/
 ├── background-jobs-inngest.md      # Inngest background jobs guide
 ├── dashboard-layout-navigation.md  # Dashboard layout and navigation system
 ├── workflows-feature.md            # Workflows feature architecture and implementation
-└── generic-components.md           # Reusable entity component patterns (EntityHeader, EntityContainer)
+├── generic-components.md           # Reusable entity component patterns
+└── search-and-pagination.md        # Search and pagination patterns
 ```
 
 ### Path Aliases
@@ -229,6 +236,24 @@ The application includes reusable generic components for entity management pages
 - Responsive padding and max-width constraints
 - Props: `children`, `header`, `search`, `pagination`
 
+**EntitySearch Component:**
+- Search input with icon and customizable placeholder
+- Integrated debouncing via `useEntitySearch` hook (500ms default)
+- Props: `search`, `onSearchChange`, `placeholder`, `debounceMs`
+- Accessible with proper ARIA labels
+
+**EntityPagination Component:**
+- Pagination controls with Previous/Next buttons
+- Displays current page and total pages
+- Automatic button disabling at boundaries
+- Props: `page`, `totalPages`, `hasNextPage`, `hasPreviousPage`, `onPageChange`
+
+**Upgrade Modal Component:**
+- Modal dialog for upgrade prompts using AlertDialog
+- Triggered by `FORBIDDEN` errors from tRPC
+- Integrated via `useUpgradeModal` hook
+- Provides error handler for mutations
+
 These components enable consistent UI patterns across workflows, credentials, executions, and future entity pages.
 
 ### Application Layout System
@@ -314,15 +339,18 @@ The workflows feature demonstrates the recommended pattern for building features
 ```
 app/features/workflows/
 ├── components/          # Client components
-│   └── workflows.tsx    # WorkflowsList, WorkflowsHeader, WorkflowsContainer
+│   └── workflows.tsx    # WorkflowsList, WorkflowsHeader, WorkflowsContainer, WorkflowsSearch, WorkflowsPagination
 ├── hooks/               # Custom React hooks
-│   └── use-workflows.ts # useSuspenseWorkflows hook
+│   ├── use-workflows.ts        # useSuspenseWorkflows hook
+│   └── use-workflows-params.ts # URL params hook (page, pageSize, search)
+├── params.ts            # Search params configuration (nuqs)
 └── server/              # Server-side utilities
     ├── routers.ts       # tRPC router with CRUD operations
-    └── prefetch.ts      # Server-side prefetch helper
+    ├── prefetch.ts      # Server-side prefetch helper
+    └── params-loader.ts # Server-side params loader
 
 components/
-└── entity-components.tsx # Generic EntityHeader and EntityContainer (used by workflows)
+└── entity-components.tsx # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination
 
 app/(dashboard)/(home)/workflows/
 └── page.tsx              # Page component using WorkflowsContainer
@@ -334,23 +362,36 @@ app/(dashboard)/(home)/workflows/
   - `remove`: Deletes workflow (user-scoped)
   - `updateName`: Updates workflow name
   - `getOne`: Fetches single workflow
-  - `getMany`: Fetches all user workflows
-- **Custom Hook** (`app/features/workflows/hooks/use-workflows.ts`): Client-side data fetching with suspense
+  - `getMany`: Fetches all user workflows with search and pagination
+    - Inputs: `page` (default: 1), `pageSize` (default: 5, max: 100), `search` (optional string)
+    - Returns: `items`, `page`, `pageSize`, `totalCount`, `totalPages`, `hasNextPage`, `hasPreviousPage`
+    - Search is case-insensitive on workflow name
+- **Custom Hooks**:
+  - `use-workflows.ts`: Client-side data fetching with suspense
+  - `use-workflows-params.ts`: URL state management for search/pagination params
+- **Params Configuration** (`app/features/workflows/params.ts`): Defines URL search params with nuqs
 - **Prefetch Helper** (`app/features/workflows/server/prefetch.ts`): Server-side data preloading for SSR
-- **Components** (`app/features/workflows/components/workflows.tsx`): Three exported functions for composable UI
+- **Params Loader** (`app/features/workflows/server/params-loader.ts`): Loads and validates search params on server
+- **Components** (`app/features/workflows/components/workflows.tsx`): Five exported functions for composable UI
   - `WorkflowsList`: Main list component displaying workflow cards
-  - `WorkflowsHeader`: Header with title and "New Workflow" button (uses `EntityHeader`)
+  - `WorkflowsHeader`: Header with title and "New Workflow" button (uses `EntityHeader`, includes upgrade modal)
+  - `WorkflowsSearch`: Search input component (uses `EntitySearch`)
+  - `WorkflowsPagination`: Pagination controls (uses `EntityPagination`)
   - `WorkflowsContainer`: Layout wrapper for the entire page (uses `EntityContainer`)
-- **Page** (`app/(dashboard)/(home)/workflows/page.tsx`): Next.js page with auth + prefetch, wrapped in `WorkflowsContainer`
+- **Page** (`app/(dashboard)/(home)/workflows/page.tsx`): Next.js page with auth + prefetch + params, wrapped in `WorkflowsContainer`
 
 **Implementation Pattern:**
 1. Define Prisma model in `prisma/schema.prisma`
-2. Create tRPC router in feature's `server/routers.ts`
+2. Create tRPC router in feature's `server/routers.ts` (include search/pagination in `getMany`)
 3. Register router in `trpc/routers/_app.ts`
-4. Create prefetch helper in feature's `server/prefetch.ts`
-5. Create custom hook in feature's `hooks/use-*.ts`
-6. Create UI components in feature's `components/` (use generic `EntityHeader` and `EntityContainer`)
-7. Create page that ties it all together with auth + prefetch
+4. Create search params configuration using nuqs in `params.ts`
+5. Create params loader for SSR in `server/params-loader.ts`
+6. Create custom hooks in feature's `hooks/`:
+   - `use-*.ts`: Data fetching hook with suspense
+   - `use-*-params.ts`: URL params management hook
+7. Create prefetch helper in feature's `server/prefetch.ts`
+8. Create UI components in feature's `components/` (use generic components: `EntityHeader`, `EntityContainer`, `EntitySearch`, `EntityPagination`)
+9. Create page that ties it all together with auth + prefetch + params
 
 **Component Composition Pattern:**
 The workflows feature demonstrates composable component architecture:
@@ -359,38 +400,76 @@ The workflows feature demonstrates composable component architecture:
 // app/features/workflows/components/workflows.tsx
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
   const createWorkflow = api.workflows.create.useMutation();
+  const { UpgradeModal, handleError } = useUpgradeModal();
 
   return (
-    <EntityHeader
-      title="Workflows"
-      description="Manage your workflow automations"
-      newButtonLabel="New Workflow"
-      onNew={() => createWorkflow.mutate()}
-      disabled={disabled}
-      isCreating={createWorkflow.isPending}
+    <>
+      <EntityHeader
+        title="Workflows"
+        description="Manage your workflow automations"
+        newButtonLabel="New Workflow"
+        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        disabled={disabled}
+        isCreating={createWorkflow.isPending}
+      />
+      <UpgradeModal />
+    </>
+  );
+}
+
+export function WorkflowsSearch() {
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntitySearch
+      search={params.search}
+      onSearchChange={(value) => setParams({ search: value })}
+      placeholder="Search workflows..."
+    />
+  );
+}
+
+export function WorkflowsPagination() {
+  const { data } = useSuspenseWorkflows();
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntityPagination
+      page={data.page}
+      totalPages={data.totalPages}
+      hasNextPage={data.hasNextPage}
+      hasPreviousPage={data.hasPreviousPage}
+      onPageChange={(page) => setParams({ page })}
     />
   );
 }
 
 export function WorkflowsContainer({ children }: { children: React.ReactNode }) {
   return (
-    <EntityContainer header={<WorkflowsHeader />}>
+    <EntityContainer
+      header={<WorkflowsHeader />}
+      search={<WorkflowsSearch />}
+      pagination={<WorkflowsPagination />}
+    >
       {children}
     </EntityContainer>
   );
 }
 
 export function WorkflowsList() {
-  const { data: workflows } = useSuspenseWorkflows();
-  // Render workflow cards...
+  const { data } = useSuspenseWorkflows();
+  // Render workflow cards from data.items...
 }
 ```
 
 ```typescript
 // app/(dashboard)/(home)/workflows/page.tsx
-export default async function WorkflowsPage() {
+export default async function WorkflowsPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireAuth();
-  await prefetchWorkflows();
+  const params = await loadWorkflowsParams(props);
+  await prefetchWorkflows(params);
 
   return (
     <WorkflowsContainer>

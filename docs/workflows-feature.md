@@ -76,9 +76,16 @@ graph TB
 | **Prefetch Helper** | `app/features/workflows/server/prefetch.ts` | Server-side data preloading |
 | **WorkflowsList** | `app/features/workflows/components/workflows.tsx` | Main list component |
 | **WorkflowsHeader** | `app/features/workflows/components/workflows.tsx` | Header with EntityHeader |
+| **WorkflowsSearch** | `app/features/workflows/components/workflows.tsx` | Search input component |
+| **WorkflowsPagination** | `app/features/workflows/components/workflows.tsx` | Pagination controls |
 | **WorkflowsContainer** | `app/features/workflows/components/workflows.tsx` | Layout with EntityContainer |
+| **Custom Hooks** | `app/features/workflows/hooks/` | use-workflows.ts, use-workflows-params.ts |
+| **Params Config** | `app/features/workflows/params.ts` | URL search params with nuqs |
+| **Params Loader** | `app/features/workflows/server/params-loader.ts` | Server-side params loader |
 | **EntityHeader** | `components/entity-components.tsx` | Generic reusable header component |
 | **EntityContainer** | `components/entity-components.tsx` | Generic reusable layout wrapper |
+| **EntitySearch** | `components/entity-components.tsx` | Generic search component |
+| **EntityPagination** | `components/entity-components.tsx` | Generic pagination component |
 | **Page Component** | `app/(dashboard)/(home)/workflows/page.tsx` | Next.js page with SSR |
 
 ---
@@ -161,18 +168,26 @@ The workflows feature follows the feature-based organization pattern:
 ```
 app/features/workflows/
 ├── components/
-│   └── workflows.tsx          # WorkflowsList, WorkflowsHeader, WorkflowsContainer
+│   └── workflows.tsx          # WorkflowsList, WorkflowsHeader, WorkflowsSearch, WorkflowsPagination, WorkflowsContainer
 ├── hooks/
-│   └── use-workflows.ts       # useSuspenseWorkflows hook
+│   ├── use-workflows.ts       # useSuspenseWorkflows hook
+│   └── use-workflows-params.ts # URL params management hook
+├── params.ts                  # Search params configuration (nuqs)
 └── server/
-    ├── routers.ts             # workflowsRouter with CRUD operations
-    └── prefetch.ts            # Server-side prefetch helper
+    ├── routers.ts             # workflowsRouter with CRUD operations + search/pagination
+    ├── prefetch.ts            # Server-side prefetch helper
+    └── params-loader.ts       # Server-side params loader
 
 components/
-└── entity-components.tsx      # Generic EntityHeader and EntityContainer
+├── entity-components.tsx      # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination
+└── upgrade-modal.tsx          # Upgrade to Pro modal
+
+hooks/
+├── use-entity-search.tsx      # Generic search hook with debouncing
+└── use-upgrade-modal.tsx      # Upgrade modal hook with error detection
 
 app/(dashboard)/(home)/workflows/
-└── page.tsx                   # Workflows page with SSR
+└── page.tsx                   # Workflows page with SSR + params
 ```
 
 ### Feature Organization Pattern
@@ -267,12 +282,51 @@ export const workflowsRouter = createTRPCRouter({
       });
     }),
 
-  // Get all user workflows
-  getMany: protectedProcedure.query(({ ctx }) => {
-    return prisma.workflow.findMany({
-      where: { userId: ctx.auth.user.id },
-    });
-  }),
+  // Get all user workflows with search and pagination
+  getMany: protectedProcedure
+    .input(
+      z.object({
+        page: z.number().min(1).default(DEFAULT_PAGE),
+        pageSize: z.number().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+        search: z.string().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { page, pageSize, search } = input;
+      const skip = (page - 1) * pageSize;
+
+      const where = {
+        userId: ctx.auth.user.id,
+        ...(search && {
+          name: {
+            contains: search,
+            mode: 'insensitive' as const,
+          },
+        }),
+      };
+
+      const [items, totalCount] = await Promise.all([
+        prisma.workflow.findMany({
+          where,
+          skip,
+          take: pageSize,
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.workflow.count({ where }),
+      ]);
+
+      const totalPages = Math.ceil(totalCount / pageSize);
+
+      return {
+        items,
+        page,
+        pageSize,
+        totalCount,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+      };
+    }),
 });
 ```
 
@@ -329,7 +383,20 @@ graph TB
 | `remove` | Mutation | `{ id: string }` | `Workflow` | Yes |
 | `updateName` | Mutation | `{ id: string, name: string }` | `Workflow` | Yes |
 | `getOne` | Query | `{ id: string }` | `Workflow \| null` | Yes |
-| `getMany` | Query | None | `Workflow[]` | Yes |
+| `getMany` | Query | `{ page?: number, pageSize?: number, search?: string }` | `PaginatedWorkflows` | Yes |
+
+**PaginatedWorkflows Type:**
+```typescript
+{
+  items: Workflow[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+```
 
 ### Security Features
 
@@ -442,57 +509,137 @@ export function EntityContainer({
   - Responsive padding and max-width constraints
   - Enables consistent UI patterns across all entity pages
 
-### Custom Hook: useSuspenseWorkflows
+### Custom Hooks
 
 **File:** `app/features/workflows/hooks/use-workflows.ts`
 
 ```typescript
 import { useTRPC } from '@/trpc/client';
 import { useSuspenseQuery } from '@tanstack/react-query';
+import { useWorkflowsParams } from './use-workflows-params';
 
 /**
- * Hook to fetch all workflows using suspense
+ * Hook to fetch all workflows using suspense with search/pagination
  */
 export const useSuspenseWorkflows = () => {
   const trpc = useTRPC();
+  const [params] = useWorkflowsParams();
 
-  return useSuspenseQuery(trpc.workflows.getMany.queryOptions());
+  return useSuspenseQuery(trpc.workflows.getMany.queryOptions(params));
 };
+```
+
+**File:** `app/features/workflows/hooks/use-workflows-params.ts`
+
+```typescript
+import { useQueryStates } from 'nuqs';
+import { workflowsSearchParams } from '../params';
+
+/**
+ * Hook to manage workflow URL search params (page, pageSize, search)
+ */
+export const useWorkflowsParams = () => {
+  return useQueryStates(workflowsSearchParams);
+};
+```
+
+**File:** `app/features/workflows/params.ts`
+
+```typescript
+import { createSearchParamsCache, parseAsInteger, parseAsString } from 'nuqs/server';
+import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '@/config/constants';
+
+export const workflowsSearchParams = {
+  page: parseAsInteger.withDefault(DEFAULT_PAGE),
+  pageSize: parseAsInteger
+    .withDefault(DEFAULT_PAGE_SIZE)
+    .withOptions({ clearOnDefault: true })
+    .validate((value) => Math.min(value, MAX_PAGE_SIZE)),
+  search: parseAsString.withDefault('').withOptions({ clearOnDefault: true }),
+};
+
+export const workflowsSearchParamsCache = createSearchParamsCache(workflowsSearchParams);
 ```
 
 ### Workflows Components
 
 **File:** `app/features/workflows/components/workflows.tsx`
 
-The workflows feature exports three composable components:
+The workflows feature exports five composable components:
 
 ```typescript
 'use client';
 
 import React from 'react';
 import { useSuspenseWorkflows } from '../hooks/use-workflows';
-import { EntityContainer, EntityHeader } from '@/components/entity-components';
+import { useWorkflowsParams } from '../hooks/use-workflows-params';
+import {
+  EntityContainer,
+  EntityHeader,
+  EntitySearch,
+  EntityPagination
+} from '@/components/entity-components';
 import { api } from '@/trpc/client';
+import { useUpgradeModal } from '@/hooks/use-upgrade-modal';
 
 // Main list component - displays workflow cards
 export function WorkflowsList() {
-  const workflows = useSuspenseWorkflows();
-
-  return <p>{JSON.stringify(workflows.data, null, 2)}</p>;
-}
-
-// Header component with create button
-export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
-  const createWorkflow = api.workflows.create.useMutation();
+  const { data } = useSuspenseWorkflows();
 
   return (
-    <EntityHeader
-      title="Workflows"
-      description="Manage your workflow automations"
-      newButtonLabel="New Workflow"
-      onNew={() => createWorkflow.mutate()}
-      disabled={disabled}
-      isCreating={createWorkflow.isPending}
+    <div>
+      {data.items.map((workflow) => (
+        <div key={workflow.id}>{workflow.name}</div>
+      ))}
+    </div>
+  );
+}
+
+// Header component with create button and upgrade modal
+export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
+  const createWorkflow = api.workflows.create.useMutation();
+  const { UpgradeModal, handleError } = useUpgradeModal();
+
+  return (
+    <>
+      <EntityHeader
+        title="Workflows"
+        description="Manage your workflow automations"
+        newButtonLabel="New Workflow"
+        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        disabled={disabled}
+        isCreating={createWorkflow.isPending}
+      />
+      <UpgradeModal />
+    </>
+  );
+}
+
+// Search component
+export function WorkflowsSearch() {
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntitySearch
+      search={params.search}
+      onSearchChange={(value) => setParams({ search: value })}
+      placeholder="Search workflows..."
+    />
+  );
+}
+
+// Pagination component
+export function WorkflowsPagination() {
+  const { data } = useSuspenseWorkflows();
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntityPagination
+      page={data.page}
+      totalPages={data.totalPages}
+      hasNextPage={data.hasNextPage}
+      hasPreviousPage={data.hasPreviousPage}
+      onPageChange={(page) => setParams({ page })}
     />
   );
 }
@@ -500,7 +647,11 @@ export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
 // Container component wrapping the entire page layout
 export function WorkflowsContainer({ children }: { children: React.ReactNode }) {
   return (
-    <EntityContainer header={<WorkflowsHeader />}>
+    <EntityContainer
+      header={<WorkflowsHeader />}
+      search={<WorkflowsSearch />}
+      pagination={<WorkflowsPagination />}
+    >
       {children}
     </EntityContainer>
   );
@@ -509,9 +660,11 @@ export function WorkflowsContainer({ children }: { children: React.ReactNode }) 
 
 **Component Responsibilities:**
 
-- **WorkflowsList**: Displays the list of workflows (data presentation layer)
-- **WorkflowsHeader**: Provides title, description, and "New Workflow" button using EntityHeader
-- **WorkflowsContainer**: Wraps the entire page with consistent layout using EntityContainer
+- **WorkflowsList**: Displays the list of workflows from `data.items` (data presentation layer)
+- **WorkflowsHeader**: Provides title, description, and "New Workflow" button with upgrade modal handling
+- **WorkflowsSearch**: Search input with debouncing that updates URL params
+- **WorkflowsPagination**: Pagination controls that update URL params
+- **WorkflowsContainer**: Wraps the entire page with consistent layout including header, search, pagination
 
 ### Component Lifecycle
 
@@ -551,10 +704,28 @@ import { prefetch, trpc } from '@/trpc/server';
 type Input = inferInput<typeof trpc.workflows.getMany>;
 
 /**
- * Prefetch all workflows
+ * Prefetch all workflows with search/pagination params
  */
 export const prefetchWorkflows = (params: Input) => {
   return prefetch(trpc.workflows.getMany.queryOptions(params));
+};
+```
+
+**File:** `app/features/workflows/server/params-loader.ts`
+
+```typescript
+import { workflowsSearchParamsCache } from '../params';
+
+type Props = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+/**
+ * Load and validate workflow search params on the server
+ */
+export const loadWorkflowsParams = async (props: Props) => {
+  const searchParams = await props.searchParams;
+  return workflowsSearchParamsCache.parse(searchParams);
 };
 ```
 
@@ -564,6 +735,7 @@ export const prefetchWorkflows = (params: Input) => {
 
 ```typescript
 import { prefetchWorkflows } from '@/app/features/workflows/server/prefetch';
+import { loadWorkflowsParams } from '@/app/features/workflows/server/params-loader';
 import { requireAuth } from '@/lib/auth-utils';
 import { HydrateClient } from '@/trpc/server';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -573,10 +745,16 @@ import {
   WorkflowsContainer,
 } from '@/app/features/workflows/components/workflows';
 
-async function WorkflowsPage() {
+async function WorkflowsPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireAuth();
 
-  prefetchWorkflows();
+  // Load and validate search params from URL
+  const params = await loadWorkflowsParams(props);
+
+  // Prefetch workflows with params for SSR
+  await prefetchWorkflows(params);
 
   return (
     <WorkflowsContainer>
@@ -596,15 +774,17 @@ export default WorkflowsPage;
 
 **Page Component Structure:**
 
-The page demonstrates the component composition pattern:
+The page demonstrates the component composition pattern with search/pagination:
 
-1. **WorkflowsContainer** (outermost): Wraps the entire page with consistent layout and header
-2. **HydrateClient**: Provides React Query hydration for SSR data
-3. **ErrorBoundary**: Catches and displays errors gracefully
-4. **Suspense**: Handles loading states during client-side navigation
-5. **WorkflowsList** (innermost): Renders the actual workflow cards
+1. **Load URL Params**: Parse and validate search params (page, pageSize, search) from URL
+2. **Prefetch Data**: Server-side prefetch workflows with params for instant render
+3. **WorkflowsContainer** (outermost): Wraps the entire page with layout, header, search, and pagination
+4. **HydrateClient**: Provides React Query hydration for SSR data
+5. **ErrorBoundary**: Catches and displays errors gracefully
+6. **Suspense**: Handles loading states during client-side navigation
+7. **WorkflowsList** (innermost): Renders the actual workflow cards from `data.items`
 
-This layered approach ensures proper data hydration, error handling, and loading states while maintaining a consistent layout.
+This layered approach ensures proper data hydration, error handling, loading states, and URL-based state management.
 
 ### Prefetch Flow Diagram
 

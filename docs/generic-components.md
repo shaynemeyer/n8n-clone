@@ -9,9 +9,11 @@ This document describes the generic, reusable components used across the applica
 1. [Architecture](#architecture)
 2. [EntityHeader Component](#entityheader-component)
 3. [EntityContainer Component](#entitycontainer-component)
-4. [Usage Patterns](#usage-patterns)
-5. [Implementation Guide](#implementation-guide)
-6. [Best Practices](#best-practices)
+4. [EntitySearch Component](#entitysearch-component)
+5. [EntityPagination Component](#entitypagination-component)
+6. [Usage Patterns](#usage-patterns)
+7. [Implementation Guide](#implementation-guide)
+8. [Best Practices](#best-practices)
 
 ---
 
@@ -58,8 +60,12 @@ graph TB
 |-----------|----------|------|
 | EntityHeader | `components/entity-components.tsx` | Generic reusable component |
 | EntityContainer | `components/entity-components.tsx` | Generic reusable component |
+| EntitySearch | `components/entity-components.tsx` | Generic reusable component |
+| EntityPagination | `components/entity-components.tsx` | Generic reusable component |
 | Feature-specific containers | `app/features/[feature]/components/` | Feature implementation |
 | Feature-specific headers | `app/features/[feature]/components/` | Feature implementation |
+| Feature-specific search | `app/features/[feature]/components/` | Feature implementation |
+| Feature-specific pagination | `app/features/[feature]/components/` | Feature implementation |
 
 ---
 
@@ -238,6 +244,202 @@ export function EntityContainer({
 
 ---
 
+## EntitySearch Component
+
+### Purpose
+
+`EntitySearch` provides a consistent search input component for entity management pages with:
+- Search icon and placeholder text
+- Integrated debouncing via `useEntitySearch` hook
+- Customizable debounce delay
+- Accessible with proper ARIA labels
+
+### Component Definition
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { Search } from 'lucide-react';
+import { Input } from './ui/input';
+import { useEntitySearch } from '@/hooks/use-entity-search';
+
+type EntitySearchProps = {
+  search: string;
+  onSearchChange: (value: string) => void;
+  placeholder?: string;
+  debounceMs?: number;
+};
+
+export function EntitySearch({
+  search,
+  onSearchChange,
+  placeholder = 'Search...',
+  debounceMs,
+}: EntitySearchProps) {
+  const { searchValue, handleSearchChange } = useEntitySearch({
+    search,
+    onSearchChange,
+    debounceMs,
+  });
+
+  return (
+    <div className="relative">
+      <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        placeholder={placeholder}
+        value={searchValue}
+        onChange={(e) => handleSearchChange(e.target.value)}
+        className="pl-9"
+        aria-label={placeholder}
+      />
+    </div>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `search` | `string` | Yes | - | Current search value from URL params |
+| `onSearchChange` | `(value: string) => void` | Yes | - | Callback to update search params |
+| `placeholder` | `string` | No | `"Search..."` | Placeholder text for input |
+| `debounceMs` | `number` | No | `500` | Debounce delay in milliseconds |
+
+### useEntitySearch Hook
+
+**File:** `hooks/use-entity-search.tsx`
+
+```typescript
+import { useEffect, useState } from 'react';
+
+type UseEntitySearchProps = {
+  search: string;
+  onSearchChange: (value: string) => void;
+  debounceMs?: number;
+};
+
+export const useEntitySearch = ({
+  search,
+  onSearchChange,
+  debounceMs = 500,
+}: UseEntitySearchProps) => {
+  const [searchValue, setSearchValue] = useState(search);
+
+  // Sync with URL params
+  useEffect(() => {
+    setSearchValue(search);
+  }, [search]);
+
+  // Debounced update to URL
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (searchValue !== search) {
+        onSearchChange(searchValue);
+      }
+    }, debounceMs);
+
+    return () => clearTimeout(timeout);
+  }, [searchValue, search, onSearchChange, debounceMs]);
+
+  return {
+    searchValue,
+    handleSearchChange: setSearchValue,
+  };
+};
+```
+
+### Visual Layout
+
+```
+┌─────────────────────────────────────────────┐
+│ 🔍 Search...                                │
+└─────────────────────────────────────────────┘
+```
+
+---
+
+## EntityPagination Component
+
+### Purpose
+
+`EntityPagination` provides consistent pagination controls for entity management pages with:
+- Previous/Next buttons
+- Current page and total pages display
+- Automatic button disabling at boundaries
+- Accessible button states
+
+### Component Definition
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { Button } from './ui/button';
+
+type EntityPaginationProps = {
+  page: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  onPageChange: (page: number) => void;
+};
+
+export function EntityPagination({
+  page,
+  totalPages,
+  hasNextPage,
+  hasPreviousPage,
+  onPageChange,
+}: EntityPaginationProps) {
+  return (
+    <div className="flex items-center justify-between">
+      <p className="text-sm text-muted-foreground">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-x-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!hasPreviousPage}
+          onClick={() => onPageChange(page - 1)}
+        >
+          Previous
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!hasNextPage}
+          onClick={() => onPageChange(page + 1)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `page` | `number` | Yes | Current page number (1-based) |
+| `totalPages` | `number` | Yes | Total number of pages |
+| `hasNextPage` | `boolean` | Yes | Whether next page exists |
+| `hasPreviousPage` | `boolean` | Yes | Whether previous page exists |
+| `onPageChange` | `(page: number) => void` | Yes | Callback to update page params |
+
+### Visual Layout
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Page 1 of 10           [Previous] [Next]           │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Usage Patterns
 
 ### Pattern 1: With Callback Button (Most Common)
@@ -334,28 +536,132 @@ export function ExecutionsContainer({ children }: { children: React.ReactNode })
 }
 ```
 
-### Pattern 4: With Search and Pagination
+### Pattern 4: With Search and Pagination (Complete Example)
+
+Use this pattern for entity management pages with search and pagination functionality:
 
 ```typescript
 // app/features/workflows/components/workflows.tsx
 'use client';
 
-import { EntityHeader, EntityContainer } from '@/components/entity-components';
-import { SearchInput } from '@/components/search-input';
-import { Pagination } from '@/components/pagination';
+import {
+  EntityHeader,
+  EntityContainer,
+  EntitySearch,
+  EntityPagination
+} from '@/components/entity-components';
+import { api } from '@/trpc/client';
+import { useSuspenseWorkflows } from '../hooks/use-workflows';
+import { useWorkflowsParams } from '../hooks/use-workflows-params';
+import { useUpgradeModal } from '@/hooks/use-upgrade-modal';
 
+// Header with create button and upgrade modal
+export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
+  const createWorkflow = api.workflows.create.useMutation();
+  const { UpgradeModal, handleError } = useUpgradeModal();
+
+  return (
+    <>
+      <EntityHeader
+        title="Workflows"
+        description="Manage your workflow automations"
+        newButtonLabel="New Workflow"
+        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        disabled={disabled}
+        isCreating={createWorkflow.isPending}
+      />
+      <UpgradeModal />
+    </>
+  );
+}
+
+// Search component with URL params
+export function WorkflowsSearch() {
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntitySearch
+      search={params.search}
+      onSearchChange={(value) => setParams({ search: value })}
+      placeholder="Search workflows..."
+    />
+  );
+}
+
+// Pagination component with URL params
+export function WorkflowsPagination() {
+  const { data } = useSuspenseWorkflows();
+  const [params, setParams] = useWorkflowsParams();
+
+  return (
+    <EntityPagination
+      page={data.page}
+      totalPages={data.totalPages}
+      hasNextPage={data.hasNextPage}
+      hasPreviousPage={data.hasPreviousPage}
+      onPageChange={(page) => setParams({ page })}
+    />
+  );
+}
+
+// Container with all sections
 export function WorkflowsContainer({ children }: { children: React.ReactNode }) {
   return (
     <EntityContainer
       header={<WorkflowsHeader />}
-      search={<SearchInput placeholder="Search workflows..." />}
-      pagination={<Pagination totalPages={10} currentPage={1} />}
+      search={<WorkflowsSearch />}
+      pagination={<WorkflowsPagination />}
     >
       {children}
     </EntityContainer>
   );
 }
+
+// List component displaying items
+export function WorkflowsList() {
+  const { data } = useSuspenseWorkflows();
+
+  return (
+    <div>
+      {data.items.map((workflow) => (
+        <div key={workflow.id}>{workflow.name}</div>
+      ))}
+    </div>
+  );
+}
 ```
+
+**Required Setup for Search/Pagination:**
+
+1. **Params Configuration** (`app/features/workflows/params.ts`):
+```typescript
+import { createSearchParamsCache, parseAsInteger, parseAsString } from 'nuqs/server';
+import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '@/config/constants';
+
+export const workflowsSearchParams = {
+  page: parseAsInteger.withDefault(DEFAULT_PAGE),
+  pageSize: parseAsInteger
+    .withDefault(DEFAULT_PAGE_SIZE)
+    .withOptions({ clearOnDefault: true })
+    .validate((value) => Math.min(value, MAX_PAGE_SIZE)),
+  search: parseAsString.withDefault('').withOptions({ clearOnDefault: true }),
+};
+
+export const workflowsSearchParamsCache = createSearchParamsCache(workflowsSearchParams);
+```
+
+2. **Params Hook** (`app/features/workflows/hooks/use-workflows-params.ts`):
+```typescript
+import { useQueryStates } from 'nuqs';
+import { workflowsSearchParams } from '../params';
+
+export const useWorkflowsParams = () => {
+  return useQueryStates(workflowsSearchParams);
+};
+```
+
+3. **Update tRPC Router** to accept search/pagination params in `getMany` procedure
+4. **Update Page Component** to load and prefetch with params
 
 ---
 

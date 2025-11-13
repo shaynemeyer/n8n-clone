@@ -10,7 +10,7 @@ A modern workflow automation platform inspired by n8n, built with Next.js 15, Re
 - **Database**: PostgreSQL with Prisma ORM
 - **Authentication**: Better Auth with email/password and OAuth support
 - **API Layer**: tRPC 11.7 for type-safe APIs
-- **State Management**: TanStack React Query (v5)
+- **State Management**: TanStack React Query (v5) with nuqs for URL state
 - **Background Jobs**: Inngest for reliable workflow orchestration
 - **AI Integration**: Vercel AI SDK with Google Gemini, OpenAI, and Anthropic
 - **Forms**: React Hook Form with Zod validation
@@ -83,16 +83,23 @@ For background jobs, the Inngest Dev Server runs at [http://localhost:8288](http
 ```
 ├── app/                    # Next.js App Router
 │   ├── layout.tsx         # Root layout with providers
-│   ├── page.tsx           # Home page (server component)
 │   ├── (auth)/            # Auth pages (login, signup)
-│   ├── features/auth/     # Auth components
-│   ├── api/
-│   │   ├── auth/          # Better Auth API routes
-│   │   ├── inngest/       # Inngest webhook endpoint
-│   │   └── trpc/          # tRPC API endpoints
-│   └── Client.tsx         # Client component example
+│   ├── (dashboard)/       # Protected dashboard routes
+│   │   ├── (home)/        # Main dashboard pages (workflows, credentials, executions)
+│   │   └── (editor)/      # Workflow editor
+│   ├── features/          # Feature modules
+│   │   ├── auth/          # Auth components
+│   │   └── workflows/     # Workflows feature with search/pagination
+│   └── api/
+│       ├── auth/          # Better Auth API routes
+│       ├── inngest/       # Inngest webhook endpoint
+│       └── trpc/          # tRPC API endpoints
 ├── components/
-│   └── ui/                # shadcn/ui components (50+)
+│   ├── ui/                # shadcn/ui components (50+)
+│   ├── entity-components.tsx  # Generic reusable components
+│   ├── app-sidebar.tsx    # Application sidebar
+│   ├── app-header.tsx     # Dashboard header
+│   └── upgrade-modal.tsx  # Upgrade modal
 ├── trpc/                  # tRPC setup
 │   ├── routers/           # API route definitions
 │   ├── init.ts            # tRPC initialization & protected procedures
@@ -112,11 +119,20 @@ For background jobs, the Inngest Dev Server runs at [http://localhost:8288](http
 │   ├── utils.ts           # Utility functions
 │   └── generated/prisma/  # Generated Prisma client
 ├── hooks/                 # Custom React hooks
+│   ├── use-mobile.ts      # Mobile breakpoint detection
+│   ├── use-entity-search.tsx  # Generic search hook with debouncing
+│   └── use-upgrade-modal.tsx  # Upgrade modal hook
+├── config/
+│   └── constants.ts       # Application constants (pagination defaults)
 └── docs/                  # Documentation
     ├── authentication-system.md
     ├── data-fetching-pattern.md
     ├── styling-and-theming-system.md
-    └── background-jobs-inngest.md
+    ├── background-jobs-inngest.md
+    ├── dashboard-layout-navigation.md
+    ├── workflows-feature.md
+    ├── generic-components.md
+    └── search-and-pagination.md
 ```
 
 ## Key Features
@@ -224,24 +240,33 @@ npx inngest-cli dev          # Start Inngest Dev Server at http://localhost:8288
 - [Data Fetching Pattern](./docs/data-fetching-pattern.md) - Comprehensive guide to the tRPC + React Query architecture with diagrams and Inngest integration
 - [Background Jobs with Inngest](./docs/background-jobs-inngest.md) - Complete guide to setting up and using Inngest for reliable background job orchestration
 - [Styling and Theming System](./docs/styling-and-theming-system.md) - Guide to Tailwind CSS v4 and theming
+- [Dashboard Layout and Navigation](./docs/dashboard-layout-navigation.md) - Dashboard layout system with sidebar navigation
+- [Workflows Feature](./docs/workflows-feature.md) - Complete workflows feature architecture with search and pagination
+- [Generic Components](./docs/generic-components.md) - Reusable entity component patterns (EntityHeader, EntityContainer, EntitySearch, EntityPagination)
+- [Search and Pagination](./docs/search-and-pagination.md) - URL-based search and pagination pattern with nuqs
 - [CLAUDE.md](./CLAUDE.md) - Project instructions for Claude Code
 
 ## Roadmap
 
 ### Current Status
-- ✅ Next.js 15 with App Router
-- ✅ tRPC + React Query setup
+- ✅ Next.js 15 with App Router and Turbopack
+- ✅ tRPC + React Query setup with type-safe APIs
 - ✅ PostgreSQL + Prisma ORM
-- ✅ shadcn/ui component library
-- ✅ Type-safe API layer
+- ✅ shadcn/ui component library (50+ components)
+- ✅ Type-safe API layer with full end-to-end types
 - ✅ Server-side rendering with data prefetching
 - ✅ Authentication system with Better Auth
 - ✅ Protected routes and API endpoints
-- ✅ Session management
+- ✅ Session management with HTTP-only cookies
 - ✅ Background jobs with Inngest
 - ✅ AI SDK integration with Inngest (`step.ai.wrap()`)
 - ✅ Multi-provider AI support (Google, OpenAI, Anthropic)
-- ✅ Workflow database model
+- ✅ Workflow database model with CRUD operations
+- ✅ Dashboard layout with collapsible sidebar
+- ✅ Generic entity components (EntityHeader, EntityContainer, EntitySearch, EntityPagination)
+- ✅ URL-based search and pagination with nuqs
+- ✅ Upgrade modal for premium features
+- ✅ Debounced search with 500ms delay
 
 ### Planned Features
 - [ ] Extended workflow database models (Node, Edge, Execution)
