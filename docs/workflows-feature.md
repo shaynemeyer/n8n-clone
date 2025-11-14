@@ -515,17 +515,58 @@ export function EntityContainer({
 
 ```typescript
 import { useTRPC } from '@/trpc/client';
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useWorkflowsParams } from './use-workflows-params';
 
 /**
- * Hook to fetch all workflows using suspense with search/pagination
+ * Hook to fetch all workflows using suspense
  */
 export const useSuspenseWorkflows = () => {
   const trpc = useTRPC();
   const [params] = useWorkflowsParams();
 
   return useSuspenseQuery(trpc.workflows.getMany.queryOptions(params));
+};
+
+/**
+ * Hook to create a new workflow
+ */
+export const useCreateWorkflow = () => {
+  const queryClient = useQueryClient();
+  const trpc = useTRPC();
+
+  return useMutation(
+    trpc.workflows.create.mutationOptions({
+      onSuccess: (data) => {
+        toast.success(`Workflow "${data.name}" created.`);
+        queryClient.invalidateQueries(trpc.workflows.getMany.queryOptions({}));
+      },
+      onError: (error) => {
+        toast.error(`Failed to create workflow: ${error.message}`);
+      },
+    })
+  );
+};
+
+/**
+ * Hook to remove workflow
+ */
+export const useRemoveWorkflow = () => {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    trpc.workflows.remove.mutationOptions({
+      onSuccess: (data) => {
+        toast.success(`Workflow "${data.name}" removed.`);
+        queryClient.invalidateQueries(trpc.workflows.getMany.queryOptions({}));
+        queryClient.invalidateQueries(
+          trpc.workflows.getOne.queryFilter({ id: data.id })
+        );
+      },
+    })
+  );
 };
 ```
 
@@ -571,81 +612,114 @@ The workflows feature exports five composable components:
 'use client';
 
 import React from 'react';
-import { useSuspenseWorkflows } from '../hooks/use-workflows';
-import { useWorkflowsParams } from '../hooks/use-workflows-params';
 import {
+  useCreateWorkflow,
+  useRemoveWorkflow,
+  useSuspenseWorkflows,
+} from '../hooks/use-workflows';
+import {
+  EmptyView,
   EntityContainer,
   EntityHeader,
+  EntityItem,
+  EntityList,
+  EntityPagination,
   EntitySearch,
-  EntityPagination
+  ErrorView,
+  LoadingView,
 } from '@/components/entity-components';
-import { api } from '@/trpc/client';
+import { useRouter } from 'next/navigation';
 import { useUpgradeModal } from '@/hooks/use-upgrade-modal';
+import { useWorkflowsParams } from '../hooks/use-workflows-params';
+import { useEntitySearch } from '@/hooks/use-entity-search';
+import type { Workflow } from '@/lib/generated/prisma/client';
+import { WorkflowIcon } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 
-// Main list component - displays workflow cards
-export function WorkflowsList() {
-  const { data } = useSuspenseWorkflows();
+// Search component with debouncing
+export function WorkflowsSearch() {
+  const [params, setParams] = useWorkflowsParams();
+  const { searchValue, onSearchChange } = useEntitySearch({
+    params,
+    setParams,
+  });
 
   return (
-    <div>
-      {data.items.map((workflow) => (
-        <div key={workflow.id}>{workflow.name}</div>
-      ))}
-    </div>
+    <EntitySearch
+      value={searchValue}
+      onChange={onSearchChange}
+      placeholder="Search workflows"
+    />
+  );
+}
+
+// Main list component using EntityList
+export function WorkflowsList() {
+  const workflows = useSuspenseWorkflows();
+
+  return (
+    <EntityList
+      items={workflows.data.items}
+      getKey={(workflow) => workflow.id}
+      renderItem={(workflow) => <WorkflowItem data={workflow} />}
+      emptyView={<WorkflowsEmpty />}
+    />
   );
 }
 
 // Header component with create button and upgrade modal
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
-  const createWorkflow = api.workflows.create.useMutation();
-  const { UpgradeModal, handleError } = useUpgradeModal();
+  const createWorkflow = useCreateWorkflow();
+  const router = useRouter();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+      onError: (error) => {
+        handleError(error);
+      },
+    });
+  };
 
   return (
     <>
+      {modal}
       <EntityHeader
         title="Workflows"
-        description="Manage your workflow automations"
-        newButtonLabel="New Workflow"
-        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        description="Create and manage your workflows"
+        onNew={handleCreate}
+        newButtonLabel="New workflow"
         disabled={disabled}
         isCreating={createWorkflow.isPending}
       />
-      <UpgradeModal />
     </>
   );
 }
 
-// Search component
-export function WorkflowsSearch() {
-  const [params, setParams] = useWorkflowsParams();
-
-  return (
-    <EntitySearch
-      search={params.search}
-      onSearchChange={(value) => setParams({ search: value })}
-      placeholder="Search workflows..."
-    />
-  );
-}
-
-// Pagination component
+// Pagination component with disabled state
 export function WorkflowsPagination() {
-  const { data } = useSuspenseWorkflows();
+  const workflows = useSuspenseWorkflows();
   const [params, setParams] = useWorkflowsParams();
 
   return (
     <EntityPagination
-      page={data.page}
-      totalPages={data.totalPages}
-      hasNextPage={data.hasNextPage}
-      hasPreviousPage={data.hasPreviousPage}
-      onPageChange={(page) => setParams({ page })}
+      disabled={workflows.isFetching}
+      totalPages={workflows.data.totalPages}
+      page={workflows.data.page}
+      onPageChange={(page) => setParams({ ...params, page })}
     />
   );
 }
 
 // Container component wrapping the entire page layout
-export function WorkflowsContainer({ children }: { children: React.ReactNode }) {
+export function WorkflowsContainer({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <EntityContainer
       header={<WorkflowsHeader />}
@@ -656,15 +730,89 @@ export function WorkflowsContainer({ children }: { children: React.ReactNode }) 
     </EntityContainer>
   );
 }
+
+// Loading state component
+export function WorkflowsLoading() {
+  return <LoadingView message="Loading workflows..." />;
+}
+
+// Error state component
+export function WorkflowsError() {
+  return <ErrorView message="Error loading workflows" />;
+}
+
+// Empty state component
+export function WorkflowsEmpty() {
+  const router = useRouter();
+  const createWorkflow = useCreateWorkflow();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onError: (error) => {
+        handleError(error);
+      },
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+    });
+  };
+
+  return (
+    <>
+      {modal}
+      <EmptyView
+        onNew={handleCreate}
+        message="No workflows found. Get started by creating a workflow."
+      />
+    </>
+  );
+}
+
+// Individual workflow item
+export function WorkflowItem({ data }: { data: Workflow }) {
+  const removeWorkflow = useRemoveWorkflow();
+
+  const handleRemove = () => {
+    removeWorkflow.mutate({ id: data.id });
+  };
+
+  return (
+    <EntityItem
+      href={`/workflows/${data.id}`}
+      title={data.name}
+      subtitle={
+        <>
+          Updated {formatDistanceToNow(data.updatedAt, { addSuffix: true })}{' '}
+          &bull; Created{' '}
+          {formatDistanceToNow(data.createdAt, { addSuffix: true })}{' '}
+        </>
+      }
+      image={
+        <div className="size-8 flex items-center justify-center">
+          <div className="size-5 text-muted-foreground">
+            <WorkflowIcon className="size-5 text-muted-foreground" />
+          </div>
+        </div>
+      }
+      onRemove={handleRemove}
+      isRemoving={removeWorkflow.isPending}
+    />
+  );
+}
 ```
 
 **Component Responsibilities:**
 
-- **WorkflowsList**: Displays the list of workflows from `data.items` (data presentation layer)
-- **WorkflowsHeader**: Provides title, description, and "New Workflow" button with upgrade modal handling
-- **WorkflowsSearch**: Search input with debouncing that updates URL params
-- **WorkflowsPagination**: Pagination controls that update URL params
+- **WorkflowsList**: Uses `EntityList` to render workflows with `WorkflowItem` and `WorkflowsEmpty` state
+- **WorkflowItem**: Individual workflow card using `EntityItem` with delete functionality and timestamps
+- **WorkflowsHeader**: Provides title, description, and "New Workflow" button with upgrade modal and navigation
+- **WorkflowsSearch**: Search input with debouncing via `useEntitySearch` hook that updates URL params
+- **WorkflowsPagination**: Pagination controls with disabled state during fetching
 - **WorkflowsContainer**: Wraps the entire page with consistent layout including header, search, pagination
+- **WorkflowsLoading**: Loading state using `LoadingView`
+- **WorkflowsError**: Error state using `ErrorView`
+- **WorkflowsEmpty**: Empty state using `EmptyView` with create action
 
 ### Component Lifecycle
 

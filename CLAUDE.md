@@ -238,21 +238,36 @@ The application includes reusable generic components for entity management pages
 
 **EntitySearch Component:**
 - Search input with icon and customizable placeholder
-- Integrated debouncing via `useEntitySearch` hook (500ms default)
-- Props: `search`, `onSearchChange`, `placeholder`, `debounceMs`
+- Works with `useEntitySearch` hook for debouncing (500ms default)
+- Props: `value`, `onChange`, `placeholder`
 - Accessible with proper ARIA labels
 
 **EntityPagination Component:**
 - Pagination controls with Previous/Next buttons
 - Displays current page and total pages
-- Automatic button disabling at boundaries
-- Props: `page`, `totalPages`, `hasNextPage`, `hasPreviousPage`, `onPageChange`
+- Automatic button disabling at boundaries and during loading
+- Props: `page`, `totalPages`, `onPageChange`, `disabled`
+
+**EntityList Component:**
+- Generic list component for rendering entity items
+- Supports custom empty state views
+- Props: `items`, `renderItem`, `getKey`, `emptyView`, `className`
+
+**EntityItem Component:**
+- Reusable card component for entity list items
+- Includes image, title, subtitle, actions, and delete functionality
+- Props: `href`, `title`, `subtitle`, `image`, `actions`, `onRemove`, `isRemoving`, `className`
+
+**State View Components:**
+- `LoadingView`: Loading state with spinner and optional message
+- `ErrorView`: Error state with alert icon and message
+- `EmptyView`: Empty state with icon, message, and optional "Add item" button
 
 **Upgrade Modal Component:**
 - Modal dialog for upgrade prompts using AlertDialog
 - Triggered by `FORBIDDEN` errors from tRPC
 - Integrated via `useUpgradeModal` hook
-- Provides error handler for mutations
+- Returns `{ handleError, modal }` for use in components
 
 These components enable consistent UI patterns across workflows, credentials, executions, and future entity pages.
 
@@ -372,12 +387,16 @@ app/(dashboard)/(home)/workflows/
 - **Params Configuration** (`app/features/workflows/params.ts`): Defines URL search params with nuqs
 - **Prefetch Helper** (`app/features/workflows/server/prefetch.ts`): Server-side data preloading for SSR
 - **Params Loader** (`app/features/workflows/server/params-loader.ts`): Loads and validates search params on server
-- **Components** (`app/features/workflows/components/workflows.tsx`): Five exported functions for composable UI
-  - `WorkflowsList`: Main list component displaying workflow cards
+- **Components** (`app/features/workflows/components/workflows.tsx`): Multiple exported components for composable UI
+  - `WorkflowsList`: Main list component using `EntityList` to render workflow items
+  - `WorkflowItem`: Individual workflow card using `EntityItem` with delete functionality
   - `WorkflowsHeader`: Header with title and "New Workflow" button (uses `EntityHeader`, includes upgrade modal)
-  - `WorkflowsSearch`: Search input component (uses `EntitySearch`)
+  - `WorkflowsSearch`: Search input component (uses `EntitySearch` with `useEntitySearch` hook)
   - `WorkflowsPagination`: Pagination controls (uses `EntityPagination`)
   - `WorkflowsContainer`: Layout wrapper for the entire page (uses `EntityContainer`)
+  - `WorkflowsLoading`: Loading state component
+  - `WorkflowsError`: Error state component
+  - `WorkflowsEmpty`: Empty state component with create action
 - **Page** (`app/(dashboard)/(home)/workflows/page.tsx`): Next.js page with auth + prefetch + params, wrapped in `WorkflowsContainer`
 
 **Implementation Pattern:**
@@ -399,47 +418,62 @@ The workflows feature demonstrates composable component architecture:
 ```typescript
 // app/features/workflows/components/workflows.tsx
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
-  const createWorkflow = api.workflows.create.useMutation();
-  const { UpgradeModal, handleError } = useUpgradeModal();
+  const createWorkflow = useCreateWorkflow();
+  const router = useRouter();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+      onError: (error) => {
+        handleError(error);
+      },
+    });
+  };
 
   return (
     <>
+      {modal}
       <EntityHeader
         title="Workflows"
-        description="Manage your workflow automations"
-        newButtonLabel="New Workflow"
-        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        description="Create and manage your workflows"
+        onNew={handleCreate}
+        newButtonLabel="New workflow"
         disabled={disabled}
         isCreating={createWorkflow.isPending}
       />
-      <UpgradeModal />
     </>
   );
 }
 
 export function WorkflowsSearch() {
   const [params, setParams] = useWorkflowsParams();
+  const { searchValue, onSearchChange } = useEntitySearch({
+    params,
+    setParams,
+  });
 
   return (
     <EntitySearch
-      search={params.search}
-      onSearchChange={(value) => setParams({ search: value })}
-      placeholder="Search workflows..."
+      value={searchValue}
+      onChange={onSearchChange}
+      placeholder="Search workflows"
     />
   );
 }
 
 export function WorkflowsPagination() {
-  const { data } = useSuspenseWorkflows();
+  const workflows = useSuspenseWorkflows();
   const [params, setParams] = useWorkflowsParams();
 
   return (
     <EntityPagination
-      page={data.page}
-      totalPages={data.totalPages}
-      hasNextPage={data.hasNextPage}
-      hasPreviousPage={data.hasPreviousPage}
-      onPageChange={(page) => setParams({ page })}
+      disabled={workflows.isFetching}
+      totalPages={workflows.data.totalPages}
+      page={workflows.data.page}
+      onPageChange={(page) => setParams({ ...params, page })}
     />
   );
 }
@@ -457,8 +491,35 @@ export function WorkflowsContainer({ children }: { children: React.ReactNode }) 
 }
 
 export function WorkflowsList() {
-  const { data } = useSuspenseWorkflows();
-  // Render workflow cards from data.items...
+  const workflows = useSuspenseWorkflows();
+
+  return (
+    <EntityList
+      items={workflows.data.items}
+      getKey={(workflow) => workflow.id}
+      renderItem={(workflow) => <WorkflowItem data={workflow} />}
+      emptyView={<WorkflowsEmpty />}
+    />
+  );
+}
+
+export function WorkflowItem({ data }: { data: Workflow }) {
+  const removeWorkflow = useRemoveWorkflow();
+
+  const handleRemove = () => {
+    removeWorkflow.mutate({ id: data.id });
+  };
+
+  return (
+    <EntityItem
+      href={`/workflows/${data.id}`}
+      title={data.name}
+      subtitle={<>Updated {formatDistanceToNow(data.updatedAt, { addSuffix: true })} &bull; Created {formatDistanceToNow(data.createdAt, { addSuffix: true })}</>}
+      image={<WorkflowIcon className="size-5 text-muted-foreground" />}
+      onRemove={handleRemove}
+      isRemoving={removeWorkflow.isPending}
+    />
+  );
 }
 ```
 

@@ -259,39 +259,28 @@ export function EntityContainer({
 **File:** `components/entity-components.tsx`
 
 ```typescript
-import { Search } from 'lucide-react';
+import { SearchIcon } from 'lucide-react';
 import { Input } from './ui/input';
-import { useEntitySearch } from '@/hooks/use-entity-search';
 
-type EntitySearchProps = {
-  search: string;
-  onSearchChange: (value: string) => void;
+interface EntitySearchProps {
+  value: string;
+  onChange: (value: string) => void;
   placeholder?: string;
-  debounceMs?: number;
-};
+}
 
 export function EntitySearch({
-  search,
-  onSearchChange,
-  placeholder = 'Search...',
-  debounceMs,
+  value,
+  onChange,
+  placeholder = 'Search',
 }: EntitySearchProps) {
-  const { searchValue, handleSearchChange } = useEntitySearch({
-    search,
-    onSearchChange,
-    debounceMs,
-  });
-
   return (
-    <div className="relative">
-      <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    <div className="relative ml-auto">
+      <SearchIcon className="size-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
       <Input
-        type="search"
+        className="max-w-[200px] bg-background shadow-none border-border pl-8"
         placeholder={placeholder}
-        value={searchValue}
-        onChange={(e) => handleSearchChange(e.target.value)}
-        className="pl-9"
-        aria-label={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
       />
     </div>
   );
@@ -302,53 +291,72 @@ export function EntitySearch({
 
 | Prop | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `search` | `string` | Yes | - | Current search value from URL params |
-| `onSearchChange` | `(value: string) => void` | Yes | - | Callback to update search params |
-| `placeholder` | `string` | No | `"Search..."` | Placeholder text for input |
-| `debounceMs` | `number` | No | `500` | Debounce delay in milliseconds |
+| `value` | `string` | Yes | - | Current search value |
+| `onChange` | `(value: string) => void` | Yes | - | Callback when value changes |
+| `placeholder` | `string` | No | `"Search"` | Placeholder text for input |
 
 ### useEntitySearch Hook
 
 **File:** `hooks/use-entity-search.tsx`
 
+This hook provides debounced search functionality with local state management:
+
 ```typescript
+import { PAGINATION } from '@/config/constants';
 import { useEffect, useState } from 'react';
 
-type UseEntitySearchProps = {
-  search: string;
-  onSearchChange: (value: string) => void;
+interface UseEntitySearchProps<T extends { search: string; page: number }> {
+  params: T;
+  setParams: (params: T) => void;
   debounceMs?: number;
-};
+}
 
-export const useEntitySearch = ({
-  search,
-  onSearchChange,
+export function useEntitySearch<T extends { search: string; page: number }>({
+  params,
+  setParams,
   debounceMs = 500,
-}: UseEntitySearchProps) => {
-  const [searchValue, setSearchValue] = useState(search);
+}: UseEntitySearchProps<T>) {
+  const [localSearch, setLocalSearch] = useState(params.search);
 
-  // Sync with URL params
   useEffect(() => {
-    setSearchValue(search);
-  }, [search]);
+    if (localSearch === '' && params.search !== '') {
+      setParams({
+        ...params,
+        search: '',
+        page: PAGINATION.DEFAULT_PAGE,
+      });
+      return;
+    }
 
-  // Debounced update to URL
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (searchValue !== search) {
-        onSearchChange(searchValue);
+    const timer = setTimeout(() => {
+      if (localSearch !== params.search) {
+        setParams({
+          ...params,
+          search: localSearch,
+          page: PAGINATION.DEFAULT_PAGE,
+        });
       }
     }, debounceMs);
 
-    return () => clearTimeout(timeout);
-  }, [searchValue, search, onSearchChange, debounceMs]);
+    return () => clearTimeout(timer);
+  }, [localSearch, params, setParams, debounceMs]);
+
+  useEffect(() => {
+    setLocalSearch(params.search);
+  }, [params.search]);
 
   return {
-    searchValue,
-    handleSearchChange: setSearchValue,
+    searchValue: localSearch,
+    onSearchChange: setLocalSearch,
   };
-};
+}
 ```
+
+**Key Features:**
+- Maintains local state for immediate UI updates
+- Debounces updates to URL params (500ms default)
+- Automatically resets page to 1 when search changes
+- Syncs with URL params when they change externally
 
 ### Visual Layout
 
@@ -377,40 +385,38 @@ export const useEntitySearch = ({
 ```typescript
 import { Button } from './ui/button';
 
-type EntityPaginationProps = {
+interface EntityPaginationProps {
   page: number;
   totalPages: number;
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
   onPageChange: (page: number) => void;
-};
+  disabled: boolean;
+}
 
 export function EntityPagination({
   page,
   totalPages,
-  hasNextPage,
-  hasPreviousPage,
   onPageChange,
+  disabled,
 }: EntityPaginationProps) {
   return (
-    <div className="flex items-center justify-between">
-      <p className="text-sm text-muted-foreground">
-        Page {page} of {totalPages}
-      </p>
-      <div className="flex items-center gap-x-2">
+    <div className="flex items-center justify-between gap-x-2 w-full">
+      <div className="flex-1 text-sm text-muted-foreground">
+        Page {page} of {totalPages || 1}
+      </div>
+      <div className="flex items-center justify-end space-x-2 py-4">
         <Button
+          disabled={page === 1 || disabled}
           variant="outline"
           size="sm"
-          disabled={!hasPreviousPage}
-          onClick={() => onPageChange(page - 1)}
+          onClick={() => onPageChange(Math.max(1, page - 1))}
         >
           Previous
         </Button>
         <Button
+          disabled={page === totalPages || totalPages === 0 || disabled}
           variant="outline"
           size="sm"
-          disabled={!hasNextPage}
-          onClick={() => onPageChange(page + 1)}
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
         >
           Next
         </Button>
@@ -426,9 +432,8 @@ export function EntityPagination({
 |------|------|----------|-------------|
 | `page` | `number` | Yes | Current page number (1-based) |
 | `totalPages` | `number` | Yes | Total number of pages |
-| `hasNextPage` | `boolean` | Yes | Whether next page exists |
-| `hasPreviousPage` | `boolean` | Yes | Whether previous page exists |
 | `onPageChange` | `(page: number) => void` | Yes | Callback to update page params |
+| `disabled` | `boolean` | Yes | Disables buttons during data fetching |
 
 ### Visual Layout
 
@@ -437,6 +442,288 @@ export function EntityPagination({
 │  Page 1 of 10           [Previous] [Next]           │
 └─────────────────────────────────────────────────────┘
 ```
+
+---
+
+## EntityList Component
+
+### Purpose
+
+`EntityList` provides a generic list component for rendering collections of entity items with:
+- Custom rendering function for each item
+- Support for custom key extraction
+- Empty state handling
+- Flexible styling
+
+### Component Definition
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { cn } from '@/lib/utils';
+
+interface EntityListProps<T> {
+  items: T[];
+  renderItem: (item: T, index: number) => React.ReactNode;
+  getKey?: (item: T, index: number) => string | number;
+  emptyView?: React.ReactNode;
+  className?: string;
+}
+
+export function EntityList<T>({
+  items,
+  renderItem,
+  getKey,
+  emptyView,
+  className,
+}: EntityListProps<T>) {
+  if (items.length === 0 && emptyView) {
+    return (
+      <div className="flex flex-1 justify-center items-center">
+        <div className="max-w-sm mx-auto">{emptyView}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn('flex flex-col gap-y-4', className)}>
+      {items.map((item, index) => (
+        <div key={getKey ? getKey(item, index) : index}>
+          {renderItem(item, index)}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `items` | `T[]` | Yes | Array of items to render |
+| `renderItem` | `(item: T, index: number) => React.ReactNode` | Yes | Function to render each item |
+| `getKey` | `(item: T, index: number) => string \| number` | No | Custom key extraction (defaults to index) |
+| `emptyView` | `React.ReactNode` | No | Component to show when items are empty |
+| `className` | `string` | No | Additional CSS classes for the list container |
+
+---
+
+## EntityItem Component
+
+### Purpose
+
+`EntityItem` provides a reusable card component for entity list items with:
+- Clickable card that navigates to detail page
+- Image/icon, title, and subtitle display
+- Custom actions
+- Delete functionality with loading state
+- Hover effects
+
+### Component Definition
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import Link from 'next/link';
+import { Card, CardContent, CardDescription, CardTitle } from './ui/card';
+import { Button } from './ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { MoreVerticalIcon, TrashIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+interface EntityItemProps {
+  href: string;
+  title: string;
+  subtitle?: React.ReactNode;
+  image?: React.ReactNode;
+  actions?: React.ReactNode;
+  onRemove?: () => void | Promise<void>;
+  isRemoving?: boolean;
+  className?: string;
+}
+
+export function EntityItem({
+  href,
+  title,
+  subtitle,
+  image,
+  actions,
+  onRemove,
+  isRemoving,
+  className,
+}: EntityItemProps) {
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (isRemoving) {
+      return;
+    }
+
+    if (onRemove) {
+      await onRemove();
+    }
+  };
+
+  return (
+    <Link href={href} prefetch>
+      <Card
+        className={cn(
+          'p-4 shadow-none hover:shadow cursor-pointer',
+          isRemoving && 'opacity-50 cursor-not-allowed',
+          className
+        )}
+      >
+        <CardContent className="flex flex-row items-center justify-between p-0">
+          <div className="flex items-center gap-3">
+            {image}
+            <div>
+              <CardTitle className="text-base font-medium">{title}</CardTitle>
+              {!!subtitle && (
+                <CardDescription className="text-xs">
+                  {subtitle}
+                </CardDescription>
+              )}
+            </div>
+          </div>
+          {(actions || onRemove) && (
+            <div className="flex gap-x-4 items-center">
+              {actions}
+              {onRemove && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVerticalIcon className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <DropdownMenuItem
+                      onClick={handleRemove}
+                      className="flex flex-row gap-x-3 items-center cursor-pointer"
+                    >
+                      <TrashIcon className="size-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `href` | `string` | Yes | Navigation URL for the card |
+| `title` | `string` | Yes | Title text |
+| `subtitle` | `React.ReactNode` | No | Subtitle content (can be JSX) |
+| `image` | `React.ReactNode` | No | Icon or image to display on the left |
+| `actions` | `React.ReactNode` | No | Custom action buttons |
+| `onRemove` | `() => void \| Promise<void>` | No | Delete handler function |
+| `isRemoving` | `boolean` | No | Loading state during delete operation |
+| `className` | `string` | No | Additional CSS classes |
+
+---
+
+## State View Components
+
+### LoadingView
+
+Displays a loading state with spinner and optional message.
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { Loader2Icon } from 'lucide-react';
+
+interface StateViewProps {
+  message?: string;
+}
+
+export function LoadingView({ message }: StateViewProps) {
+  return (
+    <div className="flex justify-center items-center h-full flex-1 flex-col gap-y-4">
+      <Loader2Icon className="size-6 animate-spin text-primary" />
+      {!!message && <p className="text-sm text-muted-foreground">{message}</p>}
+    </div>
+  );
+}
+```
+
+### ErrorView
+
+Displays an error state with alert icon and message.
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { AlertTriangleIcon } from 'lucide-react';
+
+export function ErrorView({ message }: StateViewProps) {
+  return (
+    <div className="flex justify-center items-center h-full flex-1 flex-col gap-y-4">
+      <AlertTriangleIcon className="size-6 text-red-800" />
+      {!!message && <p className="text-sm text-red-800">{message}</p>}
+    </div>
+  );
+}
+```
+
+### EmptyView
+
+Displays an empty state with icon, message, and optional action button.
+
+**File:** `components/entity-components.tsx`
+
+```typescript
+import { Package2Icon } from 'lucide-react';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { Button } from './ui/button';
+
+interface EmptyViewProps extends StateViewProps {
+  onNew?: () => void;
+}
+
+export function EmptyView({ message, onNew }: EmptyViewProps) {
+  return (
+    <Empty className="border border-dashed bg-white">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Package2Icon />
+        </EmptyMedia>
+      </EmptyHeader>
+      <EmptyTitle>No Items</EmptyTitle>
+      {!!message && <EmptyDescription>{message}</EmptyDescription>}
+      {!!onNew && (
+        <EmptyContent>
+          <Button onClick={onNew}>Add item</Button>
+        </EmptyContent>
+      )}
+    </Empty>
+  );
+}
+```
+
+### Props
+
+| Component | Prop | Type | Required | Description |
+|-----------|------|------|----------|-------------|
+| All | `message` | `string` | No | Message to display |
+| EmptyView | `onNew` | `() => void` | No | Handler for "Add item" button |
 
 ---
 
@@ -548,58 +835,79 @@ import {
   EntityHeader,
   EntityContainer,
   EntitySearch,
-  EntityPagination
+  EntityPagination,
+  EntityList,
+  EntityItem,
+  EmptyView,
 } from '@/components/entity-components';
-import { api } from '@/trpc/client';
-import { useSuspenseWorkflows } from '../hooks/use-workflows';
+import { useRouter } from 'next/navigation';
+import { useSuspenseWorkflows, useCreateWorkflow, useRemoveWorkflow } from '../hooks/use-workflows';
 import { useWorkflowsParams } from '../hooks/use-workflows-params';
 import { useUpgradeModal } from '@/hooks/use-upgrade-modal';
+import { useEntitySearch } from '@/hooks/use-entity-search';
+import { WorkflowIcon } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 
 // Header with create button and upgrade modal
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
-  const createWorkflow = api.workflows.create.useMutation();
-  const { UpgradeModal, handleError } = useUpgradeModal();
+  const createWorkflow = useCreateWorkflow();
+  const router = useRouter();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+      onError: (error) => {
+        handleError(error);
+      },
+    });
+  };
 
   return (
     <>
+      {modal}
       <EntityHeader
         title="Workflows"
-        description="Manage your workflow automations"
-        newButtonLabel="New Workflow"
-        onNew={() => createWorkflow.mutate(undefined, { onError: handleError })}
+        description="Create and manage your workflows"
+        onNew={handleCreate}
+        newButtonLabel="New workflow"
         disabled={disabled}
         isCreating={createWorkflow.isPending}
       />
-      <UpgradeModal />
     </>
   );
 }
 
-// Search component with URL params
+// Search component with debouncing
 export function WorkflowsSearch() {
   const [params, setParams] = useWorkflowsParams();
+  const { searchValue, onSearchChange } = useEntitySearch({
+    params,
+    setParams,
+  });
 
   return (
     <EntitySearch
-      search={params.search}
-      onSearchChange={(value) => setParams({ search: value })}
-      placeholder="Search workflows..."
+      value={searchValue}
+      onChange={onSearchChange}
+      placeholder="Search workflows"
     />
   );
 }
 
-// Pagination component with URL params
+// Pagination component with disabled state during fetching
 export function WorkflowsPagination() {
-  const { data } = useSuspenseWorkflows();
+  const workflows = useSuspenseWorkflows();
   const [params, setParams] = useWorkflowsParams();
 
   return (
     <EntityPagination
-      page={data.page}
-      totalPages={data.totalPages}
-      hasNextPage={data.hasNextPage}
-      hasPreviousPage={data.hasPreviousPage}
-      onPageChange={(page) => setParams({ page })}
+      disabled={workflows.isFetching}
+      totalPages={workflows.data.totalPages}
+      page={workflows.data.page}
+      onPageChange={(page) => setParams({ ...params, page })}
     />
   );
 }
@@ -617,16 +925,70 @@ export function WorkflowsContainer({ children }: { children: React.ReactNode }) 
   );
 }
 
-// List component displaying items
-export function WorkflowsList() {
-  const { data } = useSuspenseWorkflows();
+// Individual workflow item
+export function WorkflowItem({ data }: { data: Workflow }) {
+  const removeWorkflow = useRemoveWorkflow();
+
+  const handleRemove = () => {
+    removeWorkflow.mutate({ id: data.id });
+  };
 
   return (
-    <div>
-      {data.items.map((workflow) => (
-        <div key={workflow.id}>{workflow.name}</div>
-      ))}
-    </div>
+    <EntityItem
+      href={`/workflows/${data.id}`}
+      title={data.name}
+      subtitle={
+        <>
+          Updated {formatDistanceToNow(data.updatedAt, { addSuffix: true })} &bull;
+          Created {formatDistanceToNow(data.createdAt, { addSuffix: true })}
+        </>
+      }
+      image={<WorkflowIcon className="size-5 text-muted-foreground" />}
+      onRemove={handleRemove}
+      isRemoving={removeWorkflow.isPending}
+    />
+  );
+}
+
+// Empty state component
+export function WorkflowsEmpty() {
+  const router = useRouter();
+  const createWorkflow = useCreateWorkflow();
+  const { handleError, modal } = useUpgradeModal();
+
+  const handleCreate = () => {
+    createWorkflow.mutate(undefined, {
+      onError: (error) => {
+        handleError(error);
+      },
+      onSuccess: (data) => {
+        router.push(`/workflows/${data.id}`);
+      },
+    });
+  };
+
+  return (
+    <>
+      {modal}
+      <EmptyView
+        onNew={handleCreate}
+        message="No workflows found. Get started by creating a workflow."
+      />
+    </>
+  );
+}
+
+// List component displaying items
+export function WorkflowsList() {
+  const workflows = useSuspenseWorkflows();
+
+  return (
+    <EntityList
+      items={workflows.data.items}
+      getKey={(workflow) => workflow.id}
+      renderItem={(workflow) => <WorkflowItem data={workflow} />}
+      emptyView={<WorkflowsEmpty />}
+    />
   );
 }
 ```
