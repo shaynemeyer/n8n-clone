@@ -71,21 +71,23 @@ graph TB
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | **Workflow Model** | `prisma/schema.prisma` | Database schema definition |
-| **tRPC Router** | `app/features/workflows/server/routers.ts` | Type-safe API endpoints |
-| **Custom Hook** | `app/features/workflows/hooks/use-workflows.ts` | Client-side data fetching |
-| **Prefetch Helper** | `app/features/workflows/server/prefetch.ts` | Server-side data preloading |
-| **WorkflowsList** | `app/features/workflows/components/workflows.tsx` | Main list component |
-| **WorkflowsHeader** | `app/features/workflows/components/workflows.tsx` | Header with EntityHeader |
-| **WorkflowsSearch** | `app/features/workflows/components/workflows.tsx` | Search input component |
-| **WorkflowsPagination** | `app/features/workflows/components/workflows.tsx` | Pagination controls |
-| **WorkflowsContainer** | `app/features/workflows/components/workflows.tsx` | Layout with EntityContainer |
-| **Custom Hooks** | `app/features/workflows/hooks/` | use-workflows.ts, use-workflows-params.ts |
-| **Params Config** | `app/features/workflows/params.ts` | URL search params with nuqs |
-| **Params Loader** | `app/features/workflows/server/params-loader.ts` | Server-side params loader |
+| **tRPC Router** | `features/workflows/server/routers.ts` | Type-safe API endpoints |
+| **Custom Hook** | `features/workflows/hooks/use-workflows.ts` | Client-side data fetching and mutations |
+| **Prefetch Helper** | `features/workflows/server/prefetch.ts` | Server-side data preloading (prefetchWorkflows, prefetchWorkflow) |
+| **WorkflowsList** | `features/workflows/components/workflows.tsx` | Main list component |
+| **WorkflowsHeader** | `features/workflows/components/workflows.tsx` | Header with EntityHeader |
+| **WorkflowsSearch** | `features/workflows/components/workflows.tsx` | Search input component |
+| **WorkflowsPagination** | `features/workflows/components/workflows.tsx` | Pagination controls |
+| **WorkflowsContainer** | `features/workflows/components/workflows.tsx` | Layout with EntityContainer |
+| **Custom Hooks** | `features/workflows/hooks/` | use-workflows.ts, use-workflows-params.ts |
+| **Params Config** | `features/workflows/params.ts` | URL search params with nuqs |
+| **Params Loader** | `features/workflows/server/params-loader.ts` | Server-side params loader |
 | **EntityHeader** | `components/entity-components.tsx` | Generic reusable header component |
 | **EntityContainer** | `components/entity-components.tsx` | Generic reusable layout wrapper |
 | **EntitySearch** | `components/entity-components.tsx` | Generic search component |
 | **EntityPagination** | `components/entity-components.tsx` | Generic pagination component |
+| **EntityList** | `components/entity-components.tsx` | Generic list component |
+| **EntityItem** | `components/entity-components.tsx` | Generic item card component |
 | **Page Component** | `app/(dashboard)/(home)/workflows/page.tsx` | Next.js page with SSR |
 
 ---
@@ -166,20 +168,20 @@ type WorkflowWithUser = Workflow & {
 The workflows feature follows the feature-based organization pattern:
 
 ```
-app/features/workflows/
+features/workflows/
 ├── components/
 │   └── workflows.tsx          # WorkflowsList, WorkflowsHeader, WorkflowsSearch, WorkflowsPagination, WorkflowsContainer
 ├── hooks/
-│   ├── use-workflows.ts       # useSuspenseWorkflows hook
+│   ├── use-workflows.ts       # useSuspenseWorkflows, useCreateWorkflow, useRemoveWorkflow, useSuspenseWorkflow, useUpdateWorkflowName
 │   └── use-workflows-params.ts # URL params management hook
 ├── params.ts                  # Search params configuration (nuqs)
 └── server/
     ├── routers.ts             # workflowsRouter with CRUD operations + search/pagination
-    ├── prefetch.ts            # Server-side prefetch helper
+    ├── prefetch.ts            # Server-side prefetch helper (prefetchWorkflows, prefetchWorkflow)
     └── params-loader.ts       # Server-side params loader
 
 components/
-├── entity-components.tsx      # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination
+├── entity-components.tsx      # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination, EntityList, EntityItem
 └── upgrade-modal.tsx          # Upgrade to Pro modal
 
 hooks/
@@ -227,7 +229,7 @@ graph LR
 
 ### Router Definition
 
-**File:** `app/features/workflows/server/routers.ts`
+**File:** `features/workflows/server/routers.ts`
 
 ```typescript
 import { generateSlug } from 'random-word-slugs';
@@ -511,7 +513,7 @@ export function EntityContainer({
 
 ### Custom Hooks
 
-**File:** `app/features/workflows/hooks/use-workflows.ts`
+**File:** `features/workflows/hooks/use-workflows.ts`
 
 ```typescript
 import { useTRPC } from '@/trpc/client';
@@ -568,9 +570,45 @@ export const useRemoveWorkflow = () => {
     })
   );
 };
+
+/**
+ * Hook to fetch a single workflow using suspense
+ */
+export const useSuspenseWorkflow = (id: string) => {
+  const trpc = useTRPC();
+
+  return useSuspenseQuery(
+    trpc.workflows.getOne.queryOptions({
+      id,
+    })
+  );
+};
+
+/**
+ * Hook to update a workflow name
+ */
+export const useUpdateWorkflowName = () => {
+  const queryClient = useQueryClient();
+  const trpc = useTRPC();
+
+  return useMutation(
+    trpc.workflows.updateName.mutationOptions({
+      onSuccess: (data) => {
+        toast.success(`Workflow "${data.name}" updated.`);
+        queryClient.invalidateQueries(trpc.workflows.getMany.queryOptions({}));
+        queryClient.invalidateQueries(
+          trpc.workflows.getOne.queryOptions({ id: data.id })
+        );
+      },
+      onError: (error) => {
+        toast.error(`Failed to update workflow: ${error.message}`);
+      },
+    })
+  );
+};
 ```
 
-**File:** `app/features/workflows/hooks/use-workflows-params.ts`
+**File:** `features/workflows/hooks/use-workflows-params.ts`
 
 ```typescript
 import { useQueryStates } from 'nuqs';
@@ -584,7 +622,7 @@ export const useWorkflowsParams = () => {
 };
 ```
 
-**File:** `app/features/workflows/params.ts`
+**File:** `features/workflows/params.ts`
 
 ```typescript
 import { createSearchParamsCache, parseAsInteger, parseAsString } from 'nuqs/server';
@@ -604,7 +642,7 @@ export const workflowsSearchParamsCache = createSearchParamsCache(workflowsSearc
 
 ### Workflows Components
 
-**File:** `app/features/workflows/components/workflows.tsx`
+**File:** `features/workflows/components/workflows.tsx`
 
 The workflows feature exports five composable components:
 
@@ -843,7 +881,7 @@ sequenceDiagram
 
 ### Server-Side Prefetch
 
-**File:** `app/features/workflows/server/prefetch.ts`
+**File:** `features/workflows/server/prefetch.ts`
 
 ```typescript
 import type { inferInput } from '@trpc/tanstack-react-query';
@@ -859,7 +897,7 @@ export const prefetchWorkflows = (params: Input) => {
 };
 ```
 
-**File:** `app/features/workflows/server/params-loader.ts`
+**File:** `features/workflows/server/params-loader.ts`
 
 ```typescript
 import { workflowsSearchParamsCache } from '../params';
@@ -882,8 +920,8 @@ export const loadWorkflowsParams = async (props: Props) => {
 **File:** `app/(dashboard)/(home)/workflows/page.tsx`
 
 ```typescript
-import { prefetchWorkflows } from '@/app/features/workflows/server/prefetch';
-import { loadWorkflowsParams } from '@/app/features/workflows/server/params-loader';
+import { prefetchWorkflows } from '@/features/workflows/server/prefetch';
+import { loadWorkflowsParams } from '@/features/workflows/server/params-loader';
 import { requireAuth } from '@/lib/auth-utils';
 import { HydrateClient } from '@/trpc/server';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -891,7 +929,7 @@ import React, { Suspense } from 'react';
 import {
   WorkflowsList,
   WorkflowsContainer,
-} from '@/app/features/workflows/components/workflows';
+} from '@/features/workflows/components/workflows';
 
 async function WorkflowsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -1376,7 +1414,7 @@ The workflows router must be registered in the main tRPC app router:
 
 ```typescript
 import { createTRPCRouter } from '@/trpc/init';
-import { workflowsRouter } from '@/app/features/workflows/server/routers';
+import { workflowsRouter } from '@/features/workflows/server/routers';
 
 export const appRouter = createTRPCRouter({
   workflows: workflowsRouter,
@@ -1401,7 +1439,9 @@ The workflows feature demonstrates:
 
 ## Related Documentation
 
+- [Workflow Editor](./workflow-editor.md) - Workflow editor implementation with breadcrumbs and inline editing
 - [Data Fetching Pattern](./data-fetching-pattern.md) - Complete guide to tRPC + React Query
 - [Background Jobs with Inngest](./background-jobs-inngest.md) - Async workflow execution
 - [Authentication System](./authentication-system.md) - Security and authorization patterns
 - [Dashboard Layout and Navigation](./dashboard-layout-navigation.md) - UI structure
+- [Generic Components](./generic-components.md) - Reusable entity component patterns

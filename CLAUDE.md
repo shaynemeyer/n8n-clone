@@ -54,7 +54,7 @@ npx inngest-cli dev          # Start Inngest Dev Server (runs on http://localhos
 app/                      # Next.js App Router pages and layouts
 ├── layout.tsx           # Root layout with fonts (Geist Sans, Geist Mono)
 ├── (auth)/              # Auth pages (login, signup)
-│   └── features/auth/   # Auth components (login-form, signup-form)
+│   └── layout.tsx       # Auth layout wrapper
 ├── (dashboard)/         # Protected dashboard routes
 │   ├── layout.tsx       # Dashboard layout with sidebar navigation
 │   ├── (home)/          # Main dashboard pages with header
@@ -70,10 +70,23 @@ app/                      # Next.js App Router pages and layouts
 │   └── trpc/            # tRPC API endpoints
 └── globals.css          # Global styles and Tailwind config
 
+features/                # Feature-based directory structure
+├── auth/                # Authentication feature
+│   └── components/      # Auth components (auth-layout, login-form, signup-form)
+├── editor/              # Workflow editor feature
+│   └── components/      # Editor components (editor-header, editor)
+│       ├── editor-header.tsx  # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
+│       └── editor.tsx         # Editor, EditorLoading, EditorError
+└── workflows/           # Workflows management feature
+    ├── components/      # Workflow components (workflows.tsx)
+    ├── hooks/           # Custom hooks (use-workflows.ts, use-workflows-params.ts)
+    ├── server/          # Server-side utilities (routers.ts, prefetch.ts, params-loader.ts)
+    └── params.ts        # URL params configuration
+
 components/
 ├── app-header.tsx       # Dashboard header with SidebarTrigger
 ├── app-sidebar.tsx      # Main application sidebar with navigation
-├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer, EntitySearch, EntityPagination)
+├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer, EntitySearch, EntityPagination, etc.)
 ├── upgrade-modal.tsx    # Upgrade to Pro modal component
 └── ui/                  # shadcn/ui components (50+ components)
 
@@ -115,6 +128,7 @@ docs/
 ├── background-jobs-inngest.md      # Inngest background jobs guide
 ├── dashboard-layout-navigation.md  # Dashboard layout and navigation system
 ├── workflows-feature.md            # Workflows feature architecture and implementation
+├── workflow-editor.md              # Workflow editor implementation
 ├── generic-components.md           # Reusable entity component patterns
 └── search-and-pagination.md        # Search and pagination patterns
 ```
@@ -352,11 +366,11 @@ The workflows feature demonstrates the recommended pattern for building features
 
 **Feature Structure:**
 ```
-app/features/workflows/
+features/workflows/
 ├── components/          # Client components
 │   └── workflows.tsx    # WorkflowsList, WorkflowsHeader, WorkflowsContainer, WorkflowsSearch, WorkflowsPagination
 ├── hooks/               # Custom React hooks
-│   ├── use-workflows.ts        # useSuspenseWorkflows hook
+│   ├── use-workflows.ts        # useSuspenseWorkflows, useCreateWorkflow, useRemoveWorkflow, useSuspenseWorkflow, useUpdateWorkflowName
 │   └── use-workflows-params.ts # URL params hook (page, pageSize, search)
 ├── params.ts            # Search params configuration (nuqs)
 └── server/              # Server-side utilities
@@ -365,14 +379,14 @@ app/features/workflows/
     └── params-loader.ts # Server-side params loader
 
 components/
-└── entity-components.tsx # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination
+└── entity-components.tsx # Generic EntityHeader, EntityContainer, EntitySearch, EntityPagination, EntityList, EntityItem
 
 app/(dashboard)/(home)/workflows/
 └── page.tsx              # Page component using WorkflowsContainer
 ```
 
 **Key Files:**
-- **Router** (`app/features/workflows/server/routers.ts`): Defines all tRPC procedures
+- **Router** (`features/workflows/server/routers.ts`): Defines all tRPC procedures
   - `create`: Creates workflow with auto-generated name (3-word slug)
   - `remove`: Deletes workflow (user-scoped)
   - `updateName`: Updates workflow name
@@ -382,12 +396,17 @@ app/(dashboard)/(home)/workflows/
     - Returns: `items`, `page`, `pageSize`, `totalCount`, `totalPages`, `hasNextPage`, `hasPreviousPage`
     - Search is case-insensitive on workflow name
 - **Custom Hooks**:
-  - `use-workflows.ts`: Client-side data fetching with suspense
+  - `use-workflows.ts`: Client-side data fetching and mutations with suspense
+    - `useSuspenseWorkflows`: Fetches all workflows with pagination
+    - `useCreateWorkflow`: Creates a new workflow
+    - `useRemoveWorkflow`: Deletes a workflow
+    - `useSuspenseWorkflow`: Fetches a single workflow by ID
+    - `useUpdateWorkflowName`: Updates a workflow's name
   - `use-workflows-params.ts`: URL state management for search/pagination params
-- **Params Configuration** (`app/features/workflows/params.ts`): Defines URL search params with nuqs
-- **Prefetch Helper** (`app/features/workflows/server/prefetch.ts`): Server-side data preloading for SSR
-- **Params Loader** (`app/features/workflows/server/params-loader.ts`): Loads and validates search params on server
-- **Components** (`app/features/workflows/components/workflows.tsx`): Multiple exported components for composable UI
+- **Params Configuration** (`features/workflows/params.ts`): Defines URL search params with nuqs
+- **Prefetch Helper** (`features/workflows/server/prefetch.ts`): Server-side data preloading for SSR (prefetchWorkflows, prefetchWorkflow)
+- **Params Loader** (`features/workflows/server/params-loader.ts`): Loads and validates search params on server
+- **Components** (`features/workflows/components/workflows.tsx`): Multiple exported components for composable UI
   - `WorkflowsList`: Main list component using `EntityList` to render workflow items
   - `WorkflowItem`: Individual workflow card using `EntityItem` with delete functionality
   - `WorkflowsHeader`: Header with title and "New Workflow" button (uses `EntityHeader`, includes upgrade modal)
@@ -416,7 +435,7 @@ app/(dashboard)/(home)/workflows/
 The workflows feature demonstrates composable component architecture:
 
 ```typescript
-// app/features/workflows/components/workflows.tsx
+// features/workflows/components/workflows.tsx
 export function WorkflowsHeader({ disabled }: { disabled?: boolean }) {
   const createWorkflow = useCreateWorkflow();
   const router = useRouter();
