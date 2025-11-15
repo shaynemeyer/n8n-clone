@@ -1,4 +1,4 @@
-import { prefetchWorkflows } from '@/app/features/workflows/server/prefetch';
+import { prefetchWorkflows } from '@/features/workflows/server/prefetch';
 import { requireAuth } from '@/lib/auth-utils';
 import { HydrateClient } from '@/trpc/server';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -8,9 +8,9 @@ import {
   WorkflowsError,
   WorkflowsList,
   WorkflowsLoading,
-} from '@/app/features/workflows/components/workflows';
+} from '@/features/workflows/components/workflows';
 import type { SearchParams } from 'nuqs/server';
-import { workflowsParamsLoader } from '@/app/features/workflows/server/params-loader';
+import { workflowsParamsLoader } from '@/features/workflows/server/params-loader';
 
 type Props = {
   searchParams: Promise<SearchParams>;
