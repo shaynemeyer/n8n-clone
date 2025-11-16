@@ -39,6 +39,7 @@ npx inngest-cli dev          # Start Inngest Dev Server (runs on http://localhos
 ### Tech Stack
 - **Framework**: Next.js 15.5 with App Router and Turbopack
 - **UI**: React 19, Tailwind CSS v4, shadcn/ui components (New York style)
+- **Workflow Editor**: React Flow (@xyflow/react) for node-based visual editor
 - **Database**: PostgreSQL with Prisma ORM
 - **Authentication**: Better Auth with email/password and session management
 - **API Layer**: tRPC 11.7 for type-safe APIs
@@ -74,9 +75,10 @@ features/                # Feature-based directory structure
 ├── auth/                # Authentication feature
 │   └── components/      # Auth components (auth-layout, login-form, signup-form)
 ├── editor/              # Workflow editor feature
-│   └── components/      # Editor components (editor-header, editor)
-│       ├── editor-header.tsx  # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
-│       └── editor.tsx         # Editor, EditorLoading, EditorError
+│   └── components/      # Editor components (editor-header, editor, add-node-button)
+│       ├── editor-header.tsx     # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
+│       ├── editor.tsx            # Editor (React Flow integration), EditorLoading, EditorError
+│       └── add-node-button.tsx   # AddNodeButton component
 └── workflows/           # Workflows management feature
     ├── components/      # Workflow components (workflows.tsx)
     ├── hooks/           # Custom hooks (use-workflows.ts, use-workflows-params.ts)
@@ -88,7 +90,15 @@ components/
 ├── app-sidebar.tsx      # Main application sidebar with navigation
 ├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer, EntitySearch, EntityPagination, etc.)
 ├── upgrade-modal.tsx    # Upgrade to Pro modal component
+├── initial-node.tsx     # Initial placeholder node for workflows
+├── workflow-node.tsx    # Wrapper component with toolbar and metadata
+├── react-flow/          # React Flow base components
+│   ├── base-node.tsx    # Base node component with consistent styling
+│   └── placeholder-node.tsx # Placeholder node for adding new nodes
 └── ui/                  # shadcn/ui components (50+ components)
+
+config/
+└── node-components.ts   # React Flow node type registry
 
 lib/
 ├── auth.ts         # Better Auth server configuration
@@ -186,6 +196,26 @@ The Prisma schema defines:
   - Uses CUID for id generation
   - Name auto-generated using `random-word-slugs` package (3 words)
   - Belongs to User with cascading delete
+  - Has many Nodes and Connections
+  - On creation, automatically creates an INITIAL node at position (0, 0)
+
+- **Node**: Workflow nodes representing individual steps (id, workflowId, name, type, position, data, createdAt, updatedAt)
+  - Uses CUID for id generation
+  - `type`: NodeType enum (currently only INITIAL)
+  - `position`: JSON field storing { x, y } coordinates for React Flow
+  - `data`: JSON field for node-specific configuration
+  - Has many outputConnections and inputConnections
+  - Cascading delete when workflow is deleted
+
+- **Connection**: Edges connecting workflow nodes (id, workflowId, fromNodeId, toNodeId, fromOutput, toInput, createdAt, updatedAt)
+  - Uses CUID for id generation
+  - `fromNodeId` / `toNodeId`: Node IDs for source and target
+  - `fromOutput` / `toInput`: Handle names (default: "main")
+  - Unique constraint on [fromNodeId, toNodeId, fromOutput, toInput]
+  - Cascading delete when workflow or either node is deleted
+
+**Enums:**
+- **NodeType**: INITIAL (more types to be added)
 
 When modifying the schema, always run `npx prisma migrate dev` to create migrations and `npx prisma generate` to update the client.
 
@@ -387,10 +417,15 @@ app/(dashboard)/(home)/workflows/
 
 **Key Files:**
 - **Router** (`features/workflows/server/routers.ts`): Defines all tRPC procedures
-  - `create`: Creates workflow with auto-generated name (3-word slug)
-  - `remove`: Deletes workflow (user-scoped)
+  - `create`: Creates workflow with auto-generated name (3-word slug) and initial node
+    - Automatically creates an INITIAL node at position (0, 0)
+    - Node type: NodeType.INITIAL
+  - `remove`: Deletes workflow (user-scoped, cascades to nodes and connections)
   - `updateName`: Updates workflow name
-  - `getOne`: Fetches single workflow
+  - `getOne`: Fetches single workflow with nodes and connections
+    - Includes related nodes and connections
+    - Transforms database models to React Flow format (nodes/edges)
+    - Returns: { id, name, nodes, edges }
   - `getMany`: Fetches all user workflows with search and pagination
     - Inputs: `page` (default: 1), `pageSize` (default: 5, max: 100), `search` (optional string)
     - Returns: `items`, `page`, `pageSize`, `totalCount`, `totalPages`, `hasNextPage`, `hasPreviousPage`
@@ -571,3 +606,38 @@ export default async function WorkflowsPage(props: {
 - Use `requireAuth()` in page components
 
 For complete workflows documentation with diagrams, see `docs/workflows-feature.md`.
+
+### React Flow Integration
+
+The workflow editor uses React Flow (@xyflow/react) for the visual node-based interface:
+
+**Configuration** (`config/node-components.ts`):
+```typescript
+export const nodeComponents = {
+  [NodeType.INITIAL]: InitialNode,
+} as const satisfies NodeTypes;
+```
+
+**Node Component Hierarchy:**
+- `BaseNode`: Foundation component with consistent styling and selection states
+  - Sub-components: `BaseNodeHeader`, `BaseNodeHeaderTitle`, `BaseNodeContent`, `BaseNodeFooter`
+- `PlaceholderNode`: Dashed-border placeholder for adding nodes (extends BaseNode)
+- `WorkflowNode`: Wrapper providing toolbars and metadata display (uses React Flow's NodeToolbar)
+- `InitialNode`: First node shown in new workflows (combines WorkflowNode + PlaceholderNode)
+
+**Editor Component** (`features/editor/components/editor.tsx`):
+- Uses React Flow with custom node types
+- Local state management for nodes and edges
+- Change handlers: `onNodesChange`, `onEdgesChange`, `onConnect`
+- UI components: Background, Controls, MiniMap, Panel
+- `fitView` prop for auto-centering on load
+
+**Data Transformation** (`features/workflows/server/routers.ts`):
+- Database models → React Flow format in `getOne` procedure
+- `Node` model → React Flow `Node` type: { id, type, position, data }
+- `Connection` model → React Flow `Edge` type: { id, source, target, sourceHandle, targetHandle }
+
+**Node Types:**
+- `INITIAL`: Placeholder node for starting workflows (more types to be added)
+
+For complete editor documentation, see `docs/workflow-editor.md`.

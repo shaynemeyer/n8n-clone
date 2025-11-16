@@ -307,6 +307,40 @@ export function EditorNameInput({ workflowId }: { workflowId: string }) {
 - `name`: Local state synced with workflow name
 - `inputRef`: Reference for auto-focus
 
+**Update Name Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Input as EditorNameInput
+    participant Hook as useUpdateWorkflowName
+    participant Router as workflowsRouter
+    participant DB as Database
+    participant Cache as React Query
+
+    User->>Input: Click workflow name
+    Input->>Input: setIsEditing(true)
+    Input->>Input: Focus & select text
+    User->>Input: Edit name & press Enter
+    Input->>Input: handleSave()
+    Input->>Input: Validate: name !== workflow.name?
+    alt Name changed
+        Input->>Hook: mutateAsync({ id, name })
+        Hook->>Router: updateName({ id, name })
+        Router->>DB: UPDATE Workflow SET name = ?
+        DB-->>Router: Updated workflow
+        Router-->>Hook: Success
+        Hook->>Cache: Invalidate getOne & getMany
+        Hook-->>Input: Success
+        Input->>Input: setIsEditing(false)
+        Input->>User: Show success toast
+    else Name unchanged
+        Input->>Input: setIsEditing(false)
+    end
+
+    Note over Input: On error: revert to original name
+```
+
 ### EditorSaveButton
 
 Save button for workflow changes (placeholder for future implementation).
@@ -340,16 +374,34 @@ export function EditorSaveButton({ workflowId }: { workflowId: string }) {
 
 ### Editor
 
-Main editor component that will contain the workflow canvas.
+Main editor component with React Flow integration for visual workflow editing.
 
 **File:** `features/editor/components/editor.tsx`
 
 ```typescript
 'use client';
 
-import React from 'react';
+import { useState, useCallback } from 'react';
+import {
+  ReactFlow,
+  applyNodeChanges,
+  applyEdgeChanges,
+  addEdge,
+  type Node,
+  type Edge,
+  type NodeChange,
+  type EdgeChange,
+  type Connection,
+  Background,
+  Controls,
+  MiniMap,
+  Panel,
+} from '@xyflow/react';
 import { useSuspenseWorkflow } from '@/features/workflows/hooks/use-workflows';
 import { ErrorView, LoadingView } from '@/components/entity-components';
+import '@xyflow/react/dist/style.css';
+import { nodeComponents } from '@/config/node-components';
+import { AddNodeButton } from './add-node-button';
 
 export function EditorLoading() {
   return <LoadingView message="Loading editor..." />;
@@ -362,7 +414,45 @@ export function EditorError() {
 function Editor({ workflowId }: { workflowId: string }) {
   const { data: workflow } = useSuspenseWorkflow(workflowId);
 
-  return <p>{JSON.stringify(workflow, null, 2)}</p>;
+  const [nodes, setNodes] = useState<Node[]>(workflow.nodes);
+  const [edges, setEdges] = useState<Edge[]>(workflow.edges);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) =>
+      setNodes((nodesSnapshot) => applyNodeChanges(changes, nodesSnapshot)),
+    []
+  );
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) =>
+      setEdges((edgesSnapshot) => applyEdgeChanges(changes, edgesSnapshot)),
+    []
+  );
+  const onConnect = useCallback(
+    (params: Connection) =>
+      setEdges((edgesSnapshot) => addEdge(params, edgesSnapshot)),
+    []
+  );
+
+  return (
+    <div className="size-full">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        nodeTypes={nodeComponents}
+        fitView
+      >
+        <Background />
+        <Controls />
+        <MiniMap />
+        <Panel position="top-right">
+          <AddNodeButton />
+        </Panel>
+      </ReactFlow>
+    </div>
+  );
 }
 
 export default Editor;
@@ -371,14 +461,336 @@ export default Editor;
 **Props:**
 - `workflowId`: Workflow ID from route params
 
-**Current Implementation:**
-- Fetches workflow data using `useSuspenseWorkflow`
-- Displays workflow JSON (placeholder)
-- Ready for workflow canvas integration
+**Features:**
+- **React Flow Integration**: Full-featured workflow canvas with node-based editing
+- **Node Management**: Add, move, and connect nodes visually
+- **State Management**: Local state for nodes and edges with React Flow's change handlers
+- **Visual Components**:
+  - `Background`: Grid background for the canvas
+  - `Controls`: Zoom and fit view controls
+  - `MiniMap`: Overview map of the entire workflow
+  - `Panel`: Top-right panel with add node button
+- **Custom Node Types**: Registered node components via `nodeComponents` config
+- **Auto-fit**: `fitView` prop centers and scales the workflow on load
 
 **State Components:**
 - `EditorLoading`: Loading state with spinner
 - `EditorError`: Error state with error icon
+
+**Dependencies:**
+- `@xyflow/react`: React Flow library for node-based UIs
+- Requires `@xyflow/react/dist/style.css` for proper styling
+
+**React Flow Initialization:**
+
+```mermaid
+sequenceDiagram
+    participant Page as WorkflowDetailPage
+    participant Hook as useSuspenseWorkflow
+    participant Editor
+    participant ReactFlow
+    participant User
+
+    Page->>Hook: Fetch workflow data
+    Hook-->>Editor: { id, name, nodes, edges }
+    Editor->>Editor: Initialize state
+    Note over Editor: nodes = workflow.nodes<br/>edges = workflow.edges
+    Editor->>ReactFlow: Render with nodes & edges
+    ReactFlow->>ReactFlow: fitView() - center canvas
+    ReactFlow-->>User: Display workflow
+
+    User->>ReactFlow: Move node
+    ReactFlow->>Editor: onNodesChange(changes)
+    Editor->>Editor: applyNodeChanges(changes, nodes)
+    Editor->>Editor: Update local state
+    Editor->>ReactFlow: Re-render with new positions
+
+    User->>ReactFlow: Connect nodes
+    ReactFlow->>Editor: onConnect(connection)
+    Editor->>Editor: addEdge(connection, edges)
+    Editor->>Editor: Update local state
+    Editor->>ReactFlow: Re-render with new edge
+
+    Note over Editor,ReactFlow: Changes are local until saved
+```
+
+**Node Interaction Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Node as WorkflowNode
+    participant Toolbar as NodeToolbar
+    participant Editor
+    participant DB as Database
+
+    User->>Node: Hover over node
+    Node->>Toolbar: Show toolbar (top)
+    Toolbar-->>User: Display settings & delete buttons
+
+    alt Click Settings
+        User->>Toolbar: Click settings icon
+        Toolbar->>Editor: onSettings()
+        Note over Editor: Open node configuration panel<br/>(to be implemented)
+    else Click Delete
+        User->>Toolbar: Click delete icon
+        Toolbar->>Editor: onDelete()
+        Editor->>DB: Delete node from workflow
+        DB-->>Editor: Success
+        Editor->>Editor: Remove from local state
+        Editor->>Node: Re-render without node
+    end
+
+    Note over Node: InitialNode has toolbar disabled
+```
+
+### AddNodeButton
+
+Button component for adding new nodes to the workflow.
+
+**File:** `features/editor/components/add-node-button.tsx`
+
+```typescript
+'use client';
+
+import { Button } from '@/components/ui/button';
+import { PlusIcon } from 'lucide-react';
+import { memo } from 'react';
+
+export const AddNodeButton = memo(() => {
+  return (
+    <Button
+      onClick={() => {}}
+      size="icon"
+      variant="outline"
+      className="bg-background"
+    >
+      <PlusIcon />
+    </Button>
+  );
+});
+
+AddNodeButton.displayName = 'AddNodeButton';
+```
+
+**Features:**
+- Positioned in top-right panel via React Flow `Panel` component
+- Icon button with plus icon
+- Outlined variant with background
+- Memoized for performance
+- Currently placeholder implementation
+
+### Node Components
+
+Custom node components for the workflow editor, registered in the `nodeComponents` config.
+
+**File:** `config/node-components.ts`
+
+```typescript
+import { InitialNode } from '@/components/initial-node';
+import { NodeType } from '@/lib/generated/prisma/enums';
+import type { NodeTypes } from '@xyflow/react';
+
+export const nodeComponents = {
+  [NodeType.INITIAL]: InitialNode,
+} as const satisfies NodeTypes;
+
+export type RegisteredNodeType = keyof typeof nodeComponents;
+```
+
+#### InitialNode
+
+The initial placeholder node shown in new workflows.
+
+**File:** `components/initial-node.tsx`
+
+```typescript
+import { NodeProps } from '@xyflow/react';
+import { memo } from 'react';
+import { PlaceholderNode } from './react-flow/placeholder-node';
+import { PlusIcon } from 'lucide-react';
+import { WorkflowNode } from './workflow-node';
+
+export const InitialNode = memo((props: NodeProps) => {
+  return (
+    <WorkflowNode showToolbar={false}>
+      <PlaceholderNode {...props} onClick={() => {}}>
+        <div className="cursor-pointer flex items-center justify-center">
+          <PlusIcon className="size-4" />
+        </div>
+      </PlaceholderNode>
+    </WorkflowNode>
+  );
+});
+
+InitialNode.displayName = 'InitialNode';
+```
+
+**Features:**
+- Wraps `PlaceholderNode` with `WorkflowNode` (toolbar disabled)
+- Displays plus icon for adding first workflow step
+- Clickable placeholder (handler to be implemented)
+- Memoized for performance
+
+#### WorkflowNode
+
+Wrapper component that provides toolbar and metadata display for workflow nodes.
+
+**File:** `components/workflow-node.tsx`
+
+```typescript
+'use client';
+
+import { NodeToolbar, Position } from '@xyflow/react';
+import { ReactNode } from 'react';
+import { Button } from './ui/button';
+import { SettingsIcon, TrashIcon } from 'lucide-react';
+
+interface WorkflowNodeProps {
+  children: ReactNode;
+  showToolbar?: boolean;
+  onDelete?: () => void;
+  onSettings?: () => void;
+  name?: string;
+  description?: string;
+}
+
+export function WorkflowNode({
+  children,
+  showToolbar = true,
+  onDelete,
+  onSettings,
+  name,
+  description,
+}: WorkflowNodeProps) {
+  return (
+    <>
+      {showToolbar && (
+        <NodeToolbar>
+          <Button size="sm" variant="ghost" onClick={onSettings}>
+            <SettingsIcon className="size-4" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDelete}>
+            <TrashIcon className="size-4" />
+          </Button>
+        </NodeToolbar>
+      )}
+      {children}
+      {name && (
+        <NodeToolbar
+          position={Position.Bottom}
+          isVisible
+          className="max-w-[200px] text-center"
+        >
+          <p className="font-medium">{name}</p>
+          {description && (
+            <p className="text-muted-foreground truncate text-sm">
+              {description}
+            </p>
+          )}
+        </NodeToolbar>
+      )}
+    </>
+  );
+}
+```
+
+**Props:**
+- `children`: Node content to wrap
+- `showToolbar`: Show settings/delete toolbar (default: true)
+- `onDelete`: Delete button handler
+- `onSettings`: Settings button handler
+- `name`: Node name displayed below
+- `description`: Optional description text
+
+**Features:**
+- Top toolbar with settings and delete actions (when enabled)
+- Bottom toolbar for node name and description (when provided)
+- Responsive design with max-width constraint
+- Uses React Flow's `NodeToolbar` for proper positioning
+
+#### PlaceholderNode
+
+Base placeholder node for empty states and adding new nodes.
+
+**File:** `components/react-flow/placeholder-node.tsx`
+
+```typescript
+'use client';
+
+import React, { type ReactNode } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { BaseNode } from '@/components/react-flow/base-node';
+
+export type PlaceholderNodeProps = Partial<NodeProps> & {
+  children?: ReactNode;
+  onClick?: () => void;
+};
+
+export function PlaceholderNode({ children, onClick }: PlaceholderNodeProps) {
+  return (
+    <BaseNode
+      className="w-auto h-auto bg-card border-dashed border-gray-400 p-4 text-center text-gray-400 shadow-none cursor-pointer hover:border-gray-500 hover:bg-gray-50"
+      onClick={onClick}
+    >
+      {children}
+      <Handle
+        type="target"
+        style={{ visibility: 'hidden' }}
+        position={Position.Top}
+        isConnectable={false}
+      />
+      <Handle
+        type="source"
+        style={{ visibility: 'hidden' }}
+        position={Position.Bottom}
+        isConnectable={false}
+      />
+    </BaseNode>
+  );
+}
+```
+
+**Features:**
+- Dashed border styling for placeholder appearance
+- Clickable with hover effects
+- Hidden connection handles (top and bottom)
+- Non-connectable by default
+- Flexible content via children prop
+
+#### BaseNode
+
+Foundation component for all workflow nodes with consistent styling.
+
+**File:** `components/react-flow/base-node.tsx`
+
+```typescript
+import type { ComponentProps } from "react";
+import { cn } from "@/lib/utils";
+
+export function BaseNode({ className, ...props }: ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(
+        "bg-card text-card-foreground relative rounded-md border",
+        "hover:ring-1",
+        "[.react-flow__node.selected_&]:border-muted-foreground",
+        "[.react-flow__node.selected_&]:shadow-lg",
+        className,
+      )}
+      tabIndex={0}
+      {...props}
+    />
+  );
+}
+```
+
+**Features:**
+- Consistent card styling with theme colors
+- Hover ring effect
+- Selected state styling (border and shadow)
+- Keyboard accessible (tabIndex={0})
+- Additional sub-components: `BaseNodeHeader`, `BaseNodeHeaderTitle`, `BaseNodeContent`, `BaseNodeFooter`
 
 ---
 
@@ -406,7 +818,7 @@ export const prefetchWorkflow = (id: string) => {
 
 **useSuspenseWorkflow**
 
-Fetches a single workflow using React Query suspense mode.
+Fetches a single workflow with nodes and edges using React Query suspense mode.
 
 **File:** `features/workflows/hooks/use-workflows.ts`
 
@@ -424,6 +836,119 @@ export const useSuspenseWorkflow = (id: string) => {
   );
 };
 ```
+
+**Returns:**
+- `id`: Workflow ID
+- `name`: Workflow name
+- `nodes`: Array of React Flow compatible nodes
+- `edges`: Array of React Flow compatible edges
+
+The `getOne` procedure transforms database models into React Flow format:
+
+**File:** `features/workflows/server/routers.ts`
+
+```typescript
+getOne: protectedProcedure
+  .input(z.object({ id: z.string() }))
+  .query(async ({ ctx, input }) => {
+    const workflow = await prisma.workflow.findUniqueOrThrow({
+      where: { id: input.id, userId: ctx.auth.user.id },
+      include: { nodes: true, connections: true },
+    });
+
+    // Transform server nodes to react-flow compatible nodes
+    const nodes: Node[] = workflow.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position as { x: number; y: number },
+      data: node.data as Record<string, unknown>,
+    }));
+
+    // Transform server connections to react-flow compatible edges
+    const edges: Edge[] = workflow.connections.map((connection) => ({
+      id: connection.id,
+      source: connection.fromNodeId,
+      target: connection.toNodeId,
+      sourceHandle: connection.fromOutput,
+      targetHandle: connection.toInput,
+    }));
+
+    return {
+      id: workflow.id,
+      name: workflow.name,
+      nodes,
+      edges,
+    };
+  })
+```
+
+**Database Schema:**
+
+The workflow editor uses the following Prisma models:
+
+```prisma
+model Workflow {
+  id String @id @default(cuid())
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  nodes Node[]
+  connections Connection[]
+
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum NodeType {
+  INITIAL
+}
+
+model Node {
+  id String @id @default(cuid())
+  workflowId String
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  name String
+  type NodeType
+  position Json
+  data Json @default("{}")
+
+  outputConnections Connection[] @relation("FromNode")
+  inputConnections Connection[] @relation("ToNode")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+model Connection {
+  id String @id @default(cuid())
+  workflowId String
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  fromNodeId String
+  fromNode Node @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
+
+  toNodeId String
+  toNode Node @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
+
+  fromOutput String @default("main")
+  toInput String @default("main")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([fromNodeId, toNodeId, fromOutput, toInput])
+}
+```
+
+**Key Features:**
+- `Node.position`: JSON field storing `{ x, y }` coordinates
+- `Node.data`: JSON field for node-specific configuration
+- `Node.type`: Enum field for node type (currently only `INITIAL`)
+- `Connection`: Self-referencing many-to-many relationship between nodes
+- `fromOutput`/`toInput`: Support for multiple handles per node (default: "main")
+- Unique constraint on connections prevents duplicate edges
 
 **useUpdateWorkflowName**
 
@@ -668,13 +1193,16 @@ useEffect(() => {
 
 ## Future Enhancements
 
-### 1. Workflow Canvas
+### 1. Node Management ✅ (Partially Complete)
 
-Replace the JSON placeholder with a visual workflow canvas:
-- Node-based workflow builder
-- Drag-and-drop interface
-- Connection lines between nodes
-- Node configuration panels
+The workflow canvas is now implemented with React Flow:
+- ✅ Node-based workflow builder
+- ✅ Drag-and-drop interface
+- ✅ Connection lines between nodes
+- ✅ Initial node component
+- 🔲 Add node functionality
+- 🔲 Node configuration panels
+- 🔲 Additional node types (HTTP, Database, AI, etc.)
 
 ### 2. Save Functionality
 

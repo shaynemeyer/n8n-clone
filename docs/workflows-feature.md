@@ -387,6 +387,63 @@ graph TB
 | `getOne` | Query | `{ id: string }` | `Workflow \| null` | Yes |
 | `getMany` | Query | `{ page?: number, pageSize?: number, search?: string }` | `PaginatedWorkflows` | Yes |
 
+**Create Workflow Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Header as WorkflowsHeader
+    participant Hook as useCreateWorkflow
+    participant Router as workflowsRouter
+    participant DB as Database
+    participant Cache as React Query
+    participant Nav as useRouter
+
+    User->>Header: Click "New workflow"
+    Header->>Hook: mutate()
+    Hook->>Router: create()
+    Router->>Router: Generate name (3 words)
+    Note over Router: e.g., "happy-blue-penguin"
+    Router->>DB: INSERT Workflow (name, userId)
+    Router->>DB: INSERT Node (type=INITIAL)
+    DB-->>Router: Created workflow
+    Router-->>Hook: Success { id, name }
+    Hook->>Cache: Invalidate getMany
+    Hook-->>Header: onSuccess(data)
+    Header->>Nav: router.push(`/workflows/${data.id}`)
+    Nav-->>User: Navigate to editor
+
+    Note over User,Nav: User sees new workflow<br/>with INITIAL node
+```
+
+**Delete Workflow Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Item as WorkflowItem
+    participant Hook as useRemoveWorkflow
+    participant Router as workflowsRouter
+    participant DB as Database
+    participant Cache as React Query
+    participant List as WorkflowsList
+
+    User->>Item: Click delete icon
+    Item->>Hook: mutate({ id })
+    Hook->>Router: remove({ id })
+    Router->>DB: DELETE FROM Workflow WHERE id = ? AND userId = ?
+    Note over DB: Cascades to Node & Connection
+    DB-->>Router: Deleted workflow
+    Router-->>Hook: Success { id, name }
+    Hook->>Cache: Invalidate getMany & getOne
+    Hook-->>Item: onSuccess()
+    Item-->>User: Show success toast
+    Cache->>List: Trigger refetch
+    List-->>User: Update list (item removed)
+
+    Note over User,List: Workflow removed<br/>with all nodes & edges
+```
+
 **PaginatedWorkflows Type:**
 ```typescript
 {
