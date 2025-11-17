@@ -105,8 +105,54 @@ model Workflow {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now())
 
+  nodes Node[]
+  connections Connection[]
+
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum NodeType {
+  INITIAL
+  MANUAL_TRIGGER
+  HTTP_REQUEST
+}
+
+model Node {
+  id String @id @default(cuid())
+  workflowId String
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  name String
+  type NodeType
+  position Json
+  data Json @default("{}")
+
+  outputConnections Connection[] @relation("FromNode")
+  inputConnections Connection[] @relation("ToNode")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+model Connection {
+  id String @id @default(cuid())
+  workflowId String
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  fromNodeId String
+  fromNode Node @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
+
+  toNodeId String
+  toNode Node @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
+
+  fromOutput String @default("main")
+  toInput String @default("main")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([fromNodeId, toNodeId, fromOutput, toInput])
 }
 ```
 
@@ -115,6 +161,11 @@ model Workflow {
 ```mermaid
 erDiagram
     User ||--o{ Workflow : owns
+    Workflow ||--o{ Node : contains
+    Workflow ||--o{ Connection : contains
+    Node ||--o{ Connection : "from"
+    Node ||--o{ Connection : "to"
+
     User {
         string id PK
         string name
@@ -131,9 +182,31 @@ erDiagram
         datetime updatedAt
         string userId FK
     }
+    Node {
+        string id PK
+        string workflowId FK
+        string name
+        NodeType type
+        json position
+        json data
+        datetime createdAt
+        datetime updatedAt
+    }
+    Connection {
+        string id PK
+        string workflowId FK
+        string fromNodeId FK
+        string toNodeId FK
+        string fromOutput
+        string toInput
+        datetime createdAt
+        datetime updatedAt
+    }
 ```
 
 ### Field Descriptions
+
+**Workflow Fields:**
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
@@ -142,6 +215,36 @@ erDiagram
 | `createdAt` | DateTime | Creation timestamp | Auto-set on creation |
 | `updatedAt` | DateTime | Last update timestamp | Auto-updated on modification |
 | `userId` | String | Owner reference | Foreign key to User, cascading delete |
+
+**Node Fields:**
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| `id` | String | Unique identifier | Primary key, auto-generated CUID |
+| `workflowId` | String | Workflow reference | Foreign key to Workflow, cascading delete |
+| `name` | String | Node name | Display name for the node |
+| `type` | NodeType | Node type enum | INITIAL, MANUAL_TRIGGER, or HTTP_REQUEST |
+| `position` | Json | Node position | Stores `{ x, y }` coordinates for React Flow |
+| `data` | Json | Node-specific data | Configuration for the node type |
+| `createdAt` | DateTime | Creation timestamp | Auto-set on creation |
+| `updatedAt` | DateTime | Last update timestamp | Auto-updated on modification |
+
+**Connection Fields:**
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| `id` | String | Unique identifier | Primary key, auto-generated CUID |
+| `workflowId` | String | Workflow reference | Foreign key to Workflow, cascading delete |
+| `fromNodeId` | String | Source node reference | Foreign key to Node, cascading delete |
+| `toNodeId` | String | Target node reference | Foreign key to Node, cascading delete |
+| `fromOutput` | String | Source handle name | Default: "main" |
+| `toInput` | String | Target handle name | Default: "main" |
+| `createdAt` | DateTime | Creation timestamp | Auto-set on creation |
+| `updatedAt` | DateTime | Last update timestamp | Auto-updated on modification |
+
+**Constraints:**
+- Unique constraint on `[fromNodeId, toNodeId, fromOutput, toInput]` prevents duplicate connections
+- Cascading delete ensures nodes and connections are removed when workflow is deleted
 
 ### TypeScript Types
 
@@ -158,6 +261,40 @@ type Workflow = {
 // With user relation
 type WorkflowWithUser = Workflow & {
   user: User;
+}
+
+// With nodes and connections
+type WorkflowWithNodesAndConnections = Workflow & {
+  nodes: Node[];
+  connections: Connection[];
+}
+
+type Node = {
+  id: string;
+  workflowId: string;
+  name: string;
+  type: NodeType;
+  position: { x: number; y: number };
+  data: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type Connection = {
+  id: string;
+  workflowId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  fromOutput: string;
+  toInput: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+enum NodeType {
+  INITIAL = 'INITIAL',
+  MANUAL_TRIGGER = 'MANUAL_TRIGGER',
+  HTTP_REQUEST = 'HTTP_REQUEST',
 }
 ```
 
@@ -395,6 +532,7 @@ sequenceDiagram
     participant Header as WorkflowsHeader
     participant Hook as useCreateWorkflow
     participant Router as workflowsRouter
+    participant Prisma
     participant DB as Database
     participant Cache as React Query
     participant Nav as useRouter
@@ -404,16 +542,20 @@ sequenceDiagram
     Hook->>Router: create()
     Router->>Router: Generate name (3 words)
     Note over Router: e.g., "happy-blue-penguin"
-    Router->>DB: INSERT Workflow (name, userId)
-    Router->>DB: INSERT Node (type=INITIAL)
-    DB-->>Router: Created workflow
+    Router->>Prisma: workflow.create({ name, userId })
+    Prisma->>DB: BEGIN TRANSACTION
+    Prisma->>DB: INSERT INTO Workflow (id, name, userId)
+    Prisma->>DB: INSERT INTO Node (id, workflowId, type=INITIAL, position={x:0,y:0})
+    Prisma->>DB: COMMIT
+    DB-->>Prisma: Workflow + Initial Node
+    Prisma-->>Router: Created workflow
     Router-->>Hook: Success { id, name }
     Hook->>Cache: Invalidate getMany
     Hook-->>Header: onSuccess(data)
     Header->>Nav: router.push(`/workflows/${data.id}`)
     Nav-->>User: Navigate to editor
 
-    Note over User,Nav: User sees new workflow<br/>with INITIAL node
+    Note over User,Nav: User sees new workflow<br/>with INITIAL node at (0,0)
 ```
 
 **Delete Workflow Flow:**
@@ -424,6 +566,7 @@ sequenceDiagram
     participant Item as WorkflowItem
     participant Hook as useRemoveWorkflow
     participant Router as workflowsRouter
+    participant Prisma
     participant DB as Database
     participant Cache as React Query
     participant List as WorkflowsList
@@ -431,9 +574,16 @@ sequenceDiagram
     User->>Item: Click delete icon
     Item->>Hook: mutate({ id })
     Hook->>Router: remove({ id })
-    Router->>DB: DELETE FROM Workflow WHERE id = ? AND userId = ?
-    Note over DB: Cascades to Node & Connection
-    DB-->>Router: Deleted workflow
+    Router->>Prisma: workflow.delete({ id, userId })
+    Prisma->>DB: BEGIN TRANSACTION
+    Prisma->>DB: DELETE FROM Connection WHERE workflowId = ?
+    Note over DB: CASCADE: Delete all connections first
+    Prisma->>DB: DELETE FROM Node WHERE workflowId = ?
+    Note over DB: CASCADE: Delete all nodes
+    Prisma->>DB: DELETE FROM Workflow WHERE id = ? AND userId = ?
+    Prisma->>DB: COMMIT
+    DB-->>Prisma: Deleted workflow
+    Prisma-->>Router: Success { id, name }
     Router-->>Hook: Success { id, name }
     Hook->>Cache: Invalidate getMany & getOne
     Hook-->>Item: onSuccess()
@@ -441,7 +591,7 @@ sequenceDiagram
     Cache->>List: Trigger refetch
     List-->>User: Update list (item removed)
 
-    Note over User,List: Workflow removed<br/>with all nodes & edges
+    Note over User,List: Workflow removed<br/>with all nodes & connections
 ```
 
 **PaginatedWorkflows Type:**

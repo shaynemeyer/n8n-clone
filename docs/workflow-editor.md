@@ -546,7 +546,7 @@ sequenceDiagram
 
 ### AddNodeButton
 
-Button component for adding new nodes to the workflow.
+Button component that opens the NodeSelector sheet for adding new nodes to the workflow.
 
 **File:** `features/editor/components/add-node-button.tsx`
 
@@ -554,19 +554,19 @@ Button component for adding new nodes to the workflow.
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { NodeSelector } from '@/components/node-selector';
 import { PlusIcon } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useState } from 'react';
 
 export const AddNodeButton = memo(() => {
+  const [open, setOpen] = useState(false);
+
   return (
-    <Button
-      onClick={() => {}}
-      size="icon"
-      variant="outline"
-      className="bg-background"
-    >
-      <PlusIcon />
-    </Button>
+    <NodeSelector open={open} onOpenChange={setOpen}>
+      <Button size="icon" variant="outline" className="bg-background">
+        <PlusIcon />
+      </Button>
+    </NodeSelector>
   );
 });
 
@@ -575,10 +575,45 @@ AddNodeButton.displayName = 'AddNodeButton';
 
 **Features:**
 - Positioned in top-right panel via React Flow `Panel` component
-- Icon button with plus icon
-- Outlined variant with background
+- Icon button with plus icon that triggers NodeSelector sheet
+- Opens a categorized list of available node types
 - Memoized for performance
-- Currently placeholder implementation
+
+### NodeSelector
+
+Sheet-based component for selecting and adding new nodes to workflows.
+
+**File:** `components/node-selector.tsx`
+
+**Features:**
+- **Categorized Node Options:**
+  - Trigger nodes: MANUAL_TRIGGER
+  - Execution nodes: HTTP_REQUEST
+- **Smart Node Management:**
+  - Prevents duplicate manual trigger nodes per workflow (shows error toast)
+  - Automatically removes INITIAL placeholder when first real node is added
+  - Positions new nodes near center with random offset for better UX
+  - Uses `screenToFlowPosition` for accurate canvas placement
+- **UI Components:**
+  - Sheet drawer from shadcn/ui
+  - Node type cards with icons, labels, and descriptions
+  - Hover effects with left border highlight
+  - Responsive layout
+
+**Props:**
+- `open`: Controls sheet visibility
+- `onOpenChange`: Callback for sheet open/close events
+- `children`: Trigger element (typically AddNodeButton)
+
+**Node Type Definition:**
+```typescript
+export type NodeTypeOption = {
+  type: NodeType;
+  label: string;
+  description: string;
+  icon: ComponentType<{ className?: string }> | string;
+};
+```
 
 ### Node Components
 
@@ -588,11 +623,15 @@ Custom node components for the workflow editor, registered in the `nodeComponent
 
 ```typescript
 import { InitialNode } from '@/components/initial-node';
+import { HttpRequestNode } from '@/features/executions/components/http-request/node';
+import { ManualTriggerNode } from '@/features/triggers/components/manual-trigger/node';
 import { NodeType } from '@/lib/generated/prisma/enums';
 import type { NodeTypes } from '@xyflow/react';
 
 export const nodeComponents = {
   [NodeType.INITIAL]: InitialNode,
+  [NodeType.HTTP_REQUEST]: HttpRequestNode,
+  [NodeType.MANUAL_TRIGGER]: ManualTriggerNode,
 } as const satisfies NodeTypes;
 
 export type RegisteredNodeType = keyof typeof nodeComponents;
@@ -606,19 +645,24 @@ The initial placeholder node shown in new workflows.
 
 ```typescript
 import { NodeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { PlaceholderNode } from './react-flow/placeholder-node';
 import { PlusIcon } from 'lucide-react';
 import { WorkflowNode } from './workflow-node';
+import { NodeSelector } from './node-selector';
 
 export const InitialNode = memo((props: NodeProps) => {
+  const [open, setOpen] = useState(false);
+
   return (
     <WorkflowNode showToolbar={false}>
-      <PlaceholderNode {...props} onClick={() => {}}>
-        <div className="cursor-pointer flex items-center justify-center">
-          <PlusIcon className="size-4" />
-        </div>
-      </PlaceholderNode>
+      <NodeSelector open={open} onOpenChange={setOpen}>
+        <PlaceholderNode {...props} onClick={() => setOpen(true)}>
+          <div className="cursor-pointer flex items-center justify-center">
+            <PlusIcon className="size-4" />
+          </div>
+        </PlaceholderNode>
+      </NodeSelector>
     </WorkflowNode>
   );
 });
@@ -629,8 +673,99 @@ InitialNode.displayName = 'InitialNode';
 **Features:**
 - Wraps `PlaceholderNode` with `WorkflowNode` (toolbar disabled)
 - Displays plus icon for adding first workflow step
-- Clickable placeholder (handler to be implemented)
+- Opens NodeSelector on click to select node type
+- Automatically replaced when first real node is added
 - Memoized for performance
+
+#### ManualTriggerNode
+
+Trigger node that executes workflows manually via button click.
+
+**File:** `features/triggers/components/manual-trigger/node.tsx`
+
+```typescript
+import { NodeProps } from '@xyflow/react';
+import { memo } from 'react';
+import { BaseTriggerNode } from '../base-trigger-node';
+import { MousePointerIcon } from 'lucide-react';
+
+export const ManualTriggerNode = memo((props: NodeProps) => {
+  return (
+    <>
+      <BaseTriggerNode
+        {...props}
+        icon={MousePointerIcon}
+        name="When clicking 'Execute workflow'"
+        // status={nodeStatus} TODO
+        // onSettings={handleOpenSettings} TODO
+        // onDoubleClick={handleOpenSettings} TODO
+      />
+    </>
+  );
+});
+
+ManualTriggerNode.displayName = 'ManualTriggerNode';
+```
+
+**Features:**
+- Extends `BaseTriggerNode` for consistent trigger styling
+- Mouse pointer icon to indicate manual trigger
+- Only one allowed per workflow (enforced by NodeSelector)
+- Rounded left side (rounded-l-2xl) for visual distinction
+- Source handle only (workflows start here)
+
+#### HttpRequestNode
+
+Execution node for making HTTP requests to external APIs.
+
+**File:** `features/executions/components/http-request/node.tsx`
+
+```typescript
+'use client';
+
+import { Node, NodeProps } from '@xyflow/react';
+import { GlobeIcon } from 'lucide-react';
+import { memo } from 'react';
+import { BaseExecutionNode } from '../base-execution-node';
+
+type HttpRequestNodeData = {
+  endpoint?: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  body?: string;
+  [key: string]: unknown;
+};
+
+type HttpRequestNodetype = Node<HttpRequestNodeData>;
+
+export const HttpRequestNode = memo((props: NodeProps<HttpRequestNodetype>) => {
+  const nodeData = props.data as HttpRequestNodeData;
+  const description = nodeData?.endpoint
+    ? `${nodeData.method || "GET"}: ${nodeData.endpoint}`
+    : 'Not configured';
+
+  return (
+    <BaseExecutionNode
+      {...props}
+      id={props.id}
+      icon={GlobeIcon}
+      name="HTTP Request"
+      description={description}
+      onSettings={() => {}}
+      onDoubleClick={() => {}}
+    />
+  );
+});
+
+HttpRequestNode.displayName = 'HttpRequestNode';
+```
+
+**Features:**
+- Extends `BaseExecutionNode` for consistent execution node styling
+- Globe icon to indicate HTTP/web requests
+- Dynamic description based on configuration (method + endpoint)
+- Supports GET, POST, PUT, PATCH, DELETE methods
+- Target and source handles for workflow chaining
+- Shows "Not configured" when no endpoint set
 
 #### WorkflowNode
 
@@ -758,6 +893,154 @@ export function PlaceholderNode({ children, onClick }: PlaceholderNodeProps) {
 - Non-connectable by default
 - Flexible content via children prop
 
+#### BaseTriggerNode
+
+Base component for all trigger nodes with consistent styling and behavior.
+
+**File:** `features/triggers/components/base-trigger-node.tsx`
+
+```typescript
+'use client';
+
+import { type NodeProps, Position } from '@xyflow/react';
+import type { LucideIcon } from 'lucide-react';
+import Image from 'next/image';
+import { memo, type ReactNode } from 'react';
+import { BaseNode, BaseNodeContent } from '@/components/react-flow/base-node';
+import { BaseHandle } from '@/components/react-flow/base-handle';
+import { WorkflowNode } from '@/components/workflow-node';
+
+interface BaseTriggerNodeProps extends NodeProps {
+  icon: LucideIcon | string;
+  name: string;
+  description?: string;
+  children?: ReactNode;
+  onSettings?: () => void;
+  onDoubleClick?: () => void;
+}
+
+export const BaseTriggerNode = memo(
+  ({
+    id,
+    icon: Icon,
+    name,
+    description,
+    children,
+    onSettings,
+    onDoubleClick,
+  }: BaseTriggerNodeProps) => {
+    const handleDelete = () => {}; // TODO: Add delete
+
+    return (
+      <WorkflowNode
+        name={name}
+        description={description}
+        onDelete={handleDelete}
+        onSettings={onSettings}
+      >
+        <BaseNode
+          onDoubleClick={onDoubleClick}
+          className="rounded-l-2xl relative group"
+        >
+          <BaseNodeContent>
+            {typeof Icon === 'string' ? (
+              <Image src={Icon} alt={name} width={16} height={16} />
+            ) : (
+              <Icon className="size-4 text-muted-foreground" />
+            )}
+            {children}
+            <BaseHandle id="source-1" type="source" position={Position.Right} />
+          </BaseNodeContent>
+        </BaseNode>
+      </WorkflowNode>
+    );
+  }
+);
+
+BaseTriggerNode.displayName = 'BaseTriggerNode';
+```
+
+**Features:**
+- **Source Handle Only**: Workflows start from trigger nodes
+- **Rounded Left Side**: `rounded-l-2xl` class for visual distinction
+- **Icon Support**: Accepts Lucide icon components or image URLs
+- **Node Metadata**: Displays name and optional description
+- **Toolbar Integration**: Settings and delete buttons via WorkflowNode wrapper
+- **Memoized**: Optimized for React Flow re-renders
+
+#### BaseExecutionNode
+
+Base component for all execution nodes with consistent styling and behavior.
+
+**File:** `features/executions/components/base-execution-node.tsx`
+
+```typescript
+'use client';
+
+import { type NodeProps, Position } from '@xyflow/react';
+import type { LucideIcon } from 'lucide-react';
+import Image from 'next/image';
+import { memo, type ReactNode } from 'react';
+import { BaseNode, BaseNodeContent } from '@/components/react-flow/base-node';
+import { BaseHandle } from '@/components/react-flow/base-handle';
+import { WorkflowNode } from '@/components/workflow-node';
+
+interface BaseExecutionNodeProps extends NodeProps {
+  icon: LucideIcon | string;
+  name: string;
+  description?: string;
+  children?: ReactNode;
+  onSettings?: () => void;
+  onDoubleClick?: () => void;
+}
+
+export const BaseExecutionNode = memo(
+  ({
+    id,
+    icon: Icon,
+    name,
+    description,
+    children,
+    onSettings,
+    onDoubleClick,
+  }: BaseExecutionNodeProps) => {
+    const handleDelete = () => {}; // TODO: Add delete
+
+    return (
+      <WorkflowNode
+        name={name}
+        description={description}
+        onDelete={handleDelete}
+        onSettings={onSettings}
+      >
+        <BaseNode onDoubleClick={onDoubleClick}>
+          <BaseNodeContent>
+            {typeof Icon === 'string' ? (
+              <Image src={Icon} alt={name} width={16} height={16} />
+            ) : (
+              <Icon className="size-4 text-muted-foreground" />
+            )}
+            {children}
+            <BaseHandle id="target-1" type="target" position={Position.Left} />
+            <BaseHandle id="source-1" type="source" position={Position.Right} />
+          </BaseNodeContent>
+        </BaseNode>
+      </WorkflowNode>
+    );
+  }
+);
+
+BaseExecutionNode.displayName = 'BaseExecutionNode';
+```
+
+**Features:**
+- **Target and Source Handles**: Execution nodes can be chained together
+- **Standard Rounded Corners**: Uses default BaseNode styling
+- **Icon Support**: Accepts Lucide icon components or image URLs
+- **Node Metadata**: Displays name and optional description
+- **Toolbar Integration**: Settings and delete buttons via WorkflowNode wrapper
+- **Memoized**: Optimized for React Flow re-renders
+
 #### BaseNode
 
 Foundation component for all workflow nodes with consistent styling.
@@ -791,6 +1074,46 @@ export function BaseNode({ className, ...props }: ComponentProps<"div">) {
 - Selected state styling (border and shadow)
 - Keyboard accessible (tabIndex={0})
 - Additional sub-components: `BaseNodeHeader`, `BaseNodeHeaderTitle`, `BaseNodeContent`, `BaseNodeFooter`
+
+#### BaseHandle
+
+Styled connection handle component for node inputs and outputs.
+
+**File:** `components/react-flow/base-handle.tsx`
+
+```typescript
+import type { ComponentProps } from "react";
+import { Handle, type HandleProps } from "@xyflow/react";
+
+import { cn } from "@/lib/utils";
+
+export type BaseHandleProps = HandleProps;
+
+export function BaseHandle({
+  className,
+  children,
+  ...props
+}: ComponentProps<typeof Handle>) {
+  return (
+    <Handle
+      {...props}
+      className={cn(
+        "dark:border-secondary dark:bg-secondary h-[11px] w-[11px] rounded-full border border-slate-300 bg-slate-100 transition",
+        className,
+      )}
+    >
+      {children}
+    </Handle>
+  );
+}
+```
+
+**Features:**
+- Consistent circular handle styling (11x11px)
+- Theme-aware colors (light/dark mode support)
+- Smooth transitions for interactions
+- Extends React Flow's Handle component
+- Used by BaseTriggerNode and BaseExecutionNode for connection points
 
 ---
 
@@ -902,6 +1225,8 @@ model Workflow {
 
 enum NodeType {
   INITIAL
+  MANUAL_TRIGGER
+  HTTP_REQUEST
 }
 
 model Node {
@@ -945,10 +1270,15 @@ model Connection {
 **Key Features:**
 - `Node.position`: JSON field storing `{ x, y }` coordinates
 - `Node.data`: JSON field for node-specific configuration
-- `Node.type`: Enum field for node type (currently only `INITIAL`)
+- `Node.type`: Enum field for node type (INITIAL, MANUAL_TRIGGER, HTTP_REQUEST)
 - `Connection`: Self-referencing many-to-many relationship between nodes
 - `fromOutput`/`toInput`: Support for multiple handles per node (default: "main")
 - Unique constraint on connections prevents duplicate edges
+
+**Node Type Descriptions:**
+- **INITIAL**: Placeholder node shown in new workflows, automatically replaced when first real node is added
+- **MANUAL_TRIGGER**: Trigger node for manual workflow execution, only one allowed per workflow
+- **HTTP_REQUEST**: Execution node for making HTTP requests with configurable method and endpoint
 
 **useUpdateWorkflowName**
 
@@ -1193,16 +1523,22 @@ useEffect(() => {
 
 ## Future Enhancements
 
-### 1. Node Management ✅ (Partially Complete)
+### 1. Node Management ✅ (Mostly Complete)
 
 The workflow canvas is now implemented with React Flow:
 - ✅ Node-based workflow builder
 - ✅ Drag-and-drop interface
 - ✅ Connection lines between nodes
 - ✅ Initial node component
-- 🔲 Add node functionality
-- 🔲 Node configuration panels
-- 🔲 Additional node types (HTTP, Database, AI, etc.)
+- ✅ Add node functionality (NodeSelector component)
+- ✅ Base node components (BaseTriggerNode, BaseExecutionNode)
+- ✅ Multiple node types:
+  - ✅ INITIAL (placeholder)
+  - ✅ MANUAL_TRIGGER (trigger node)
+  - ✅ HTTP_REQUEST (execution node)
+- 🔲 Node configuration panels (settings/double-click handlers)
+- 🔲 Node persistence (save nodes to database)
+- 🔲 Additional node types (Database, AI, Webhooks, etc.)
 
 ### 2. Save Functionality
 

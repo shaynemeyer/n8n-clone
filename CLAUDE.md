@@ -79,6 +79,16 @@ features/                # Feature-based directory structure
 │       ├── editor-header.tsx     # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
 │       ├── editor.tsx            # Editor (React Flow integration), EditorLoading, EditorError
 │       └── add-node-button.tsx   # AddNodeButton component
+├── executions/          # Execution nodes feature
+│   └── components/      # Execution node components
+│       ├── base-execution-node.tsx  # Base component for execution nodes
+│       └── http-request/
+│           └── node.tsx             # HTTP Request node implementation
+├── triggers/            # Trigger nodes feature
+│   └── components/      # Trigger node components
+│       ├── base-trigger-node.tsx    # Base component for trigger nodes
+│       └── manual-trigger/
+│           └── node.tsx             # Manual Trigger node implementation
 └── workflows/           # Workflows management feature
     ├── components/      # Workflow components (workflows.tsx)
     ├── hooks/           # Custom hooks (use-workflows.ts, use-workflows-params.ts)
@@ -91,9 +101,11 @@ components/
 ├── entity-components.tsx # Generic reusable components (EntityHeader, EntityContainer, EntitySearch, EntityPagination, etc.)
 ├── upgrade-modal.tsx    # Upgrade to Pro modal component
 ├── initial-node.tsx     # Initial placeholder node for workflows
+├── node-selector.tsx    # Node type selection sheet component
 ├── workflow-node.tsx    # Wrapper component with toolbar and metadata
 ├── react-flow/          # React Flow base components
 │   ├── base-node.tsx    # Base node component with consistent styling
+│   ├── base-handle.tsx  # Base handle component for node connections
 │   └── placeholder-node.tsx # Placeholder node for adding new nodes
 └── ui/                  # shadcn/ui components (50+ components)
 
@@ -201,7 +213,7 @@ The Prisma schema defines:
 
 - **Node**: Workflow nodes representing individual steps (id, workflowId, name, type, position, data, createdAt, updatedAt)
   - Uses CUID for id generation
-  - `type`: NodeType enum (currently only INITIAL)
+  - `type`: NodeType enum (INITIAL, MANUAL_TRIGGER, HTTP_REQUEST)
   - `position`: JSON field storing { x, y } coordinates for React Flow
   - `data`: JSON field for node-specific configuration
   - Has many outputConnections and inputConnections
@@ -215,7 +227,7 @@ The Prisma schema defines:
   - Cascading delete when workflow or either node is deleted
 
 **Enums:**
-- **NodeType**: INITIAL (more types to be added)
+- **NodeType**: INITIAL, MANUAL_TRIGGER, HTTP_REQUEST
 
 When modifying the schema, always run `npx prisma migrate dev` to create migrations and `npx prisma generate` to update the client.
 
@@ -615,15 +627,34 @@ The workflow editor uses React Flow (@xyflow/react) for the visual node-based in
 ```typescript
 export const nodeComponents = {
   [NodeType.INITIAL]: InitialNode,
+  [NodeType.HTTP_REQUEST]: HttpRequestNode,
+  [NodeType.MANUAL_TRIGGER]: ManualTriggerNode,
 } as const satisfies NodeTypes;
 ```
 
 **Node Component Hierarchy:**
 - `BaseNode`: Foundation component with consistent styling and selection states
   - Sub-components: `BaseNodeHeader`, `BaseNodeHeaderTitle`, `BaseNodeContent`, `BaseNodeFooter`
+- `BaseHandle`: Styled connection handle component for node inputs/outputs
 - `PlaceholderNode`: Dashed-border placeholder for adding nodes (extends BaseNode)
 - `WorkflowNode`: Wrapper providing toolbars and metadata display (uses React Flow's NodeToolbar)
 - `InitialNode`: First node shown in new workflows (combines WorkflowNode + PlaceholderNode)
+- `BaseTriggerNode`: Base component for trigger nodes (source handle only, rounded-l-2xl styling)
+- `BaseExecutionNode`: Base component for execution nodes (target and source handles)
+- `ManualTriggerNode`: Manual trigger implementation (extends BaseTriggerNode)
+- `HttpRequestNode`: HTTP request node implementation (extends BaseExecutionNode)
+
+**Node Selector Component** (`components/node-selector.tsx`):
+- Sheet-based UI for selecting and adding new nodes to workflows
+- Displays categorized node options:
+  - Trigger nodes: MANUAL_TRIGGER
+  - Execution nodes: HTTP_REQUEST
+- Features:
+  - Prevents duplicate manual trigger nodes per workflow
+  - Automatically removes INITIAL placeholder when first real node is added
+  - Positions new nodes near center with random offset
+  - Uses `screenToFlowPosition` for accurate placement
+- Props: `open`, `onOpenChange`, `children` (trigger element)
 
 **Editor Component** (`features/editor/components/editor.tsx`):
 - Uses React Flow with custom node types
@@ -638,6 +669,8 @@ export const nodeComponents = {
 - `Connection` model → React Flow `Edge` type: { id, source, target, sourceHandle, targetHandle }
 
 **Node Types:**
-- `INITIAL`: Placeholder node for starting workflows (more types to be added)
+- `INITIAL`: Placeholder node for starting workflows (automatically replaced when first real node is added)
+- `MANUAL_TRIGGER`: Trigger node that executes workflow when user clicks a button (only one allowed per workflow)
+- `HTTP_REQUEST`: Execution node for making HTTP requests (supports GET, POST, PUT, PATCH, DELETE methods)
 
 For complete editor documentation, see `docs/workflow-editor.md`.
