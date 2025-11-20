@@ -43,7 +43,7 @@ npx inngest-cli dev          # Start Inngest Dev Server (runs on http://localhos
 - **Database**: PostgreSQL with Prisma ORM
 - **Authentication**: Better Auth with email/password and session management
 - **API Layer**: tRPC 11.7 for type-safe APIs
-- **State Management**: TanStack React Query (v5) with nuqs for URL state management
+- **State Management**: TanStack React Query (v5) with nuqs for URL state management, Jotai for editor state
 - **Background Jobs**: Inngest for reliable workflow orchestration
 - **AI Integration**: Vercel AI SDK with Google Gemini, OpenAI, and Anthropic
 - **Forms**: React Hook Form with Zod validation
@@ -75,20 +75,24 @@ features/                # Feature-based directory structure
 ├── auth/                # Authentication feature
 │   └── components/      # Auth components (auth-layout, login-form, signup-form)
 ├── editor/              # Workflow editor feature
-│   └── components/      # Editor components (editor-header, editor, add-node-button)
-│       ├── editor-header.tsx     # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
-│       ├── editor.tsx            # Editor (React Flow integration), EditorLoading, EditorError
-│       └── add-node-button.tsx   # AddNodeButton component
+│   ├── components/      # Editor components (editor-header, editor, add-node-button)
+│   │   ├── editor-header.tsx     # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
+│   │   ├── editor.tsx            # Editor (React Flow integration), EditorLoading, EditorError
+│   │   └── add-node-button.tsx   # AddNodeButton component
+│   └── store/           # Editor state management
+│       └── atoms.ts     # Jotai atoms (editorAtom for ReactFlowInstance)
 ├── executions/          # Execution nodes feature
 │   └── components/      # Execution node components
 │       ├── base-execution-node.tsx  # Base component for execution nodes
 │       └── http-request/
-│           └── node.tsx             # HTTP Request node implementation
+│           ├── node.tsx             # HTTP Request node implementation
+│           └── dialog.tsx           # HTTP Request configuration dialog
 ├── triggers/            # Trigger nodes feature
 │   └── components/      # Trigger node components
 │       ├── base-trigger-node.tsx    # Base component for trigger nodes
 │       └── manual-trigger/
-│           └── node.tsx             # Manual Trigger node implementation
+│           ├── node.tsx             # Manual Trigger node implementation
+│           └── dialog.tsx           # Manual Trigger dialog
 └── workflows/           # Workflows management feature
     ├── components/      # Workflow components (workflows.tsx)
     ├── hooks/           # Custom hooks (use-workflows.ts, use-workflows-params.ts)
@@ -106,7 +110,8 @@ components/
 ├── react-flow/          # React Flow base components
 │   ├── base-node.tsx    # Base node component with consistent styling
 │   ├── base-handle.tsx  # Base handle component for node connections
-│   └── placeholder-node.tsx # Placeholder node for adding new nodes
+│   ├── placeholder-node.tsx # Placeholder node for adding new nodes
+│   └── node-status-indicator.tsx # Node status visual indicators (loading, success, error)
 └── ui/                  # shadcn/ui components (50+ components)
 
 config/
@@ -433,6 +438,10 @@ app/(dashboard)/(home)/workflows/
     - Automatically creates an INITIAL node at position (0, 0)
     - Node type: NodeType.INITIAL
   - `remove`: Deletes workflow (user-scoped, cascades to nodes and connections)
+  - `update`: Saves workflow nodes and edges
+    - Input: `id`, `nodes` array (id, type, position, data), `edges` array (source, target, handles)
+    - Uses Prisma transaction for consistency
+    - Deletes existing nodes/connections, creates new ones, updates timestamp
   - `updateName`: Updates workflow name
   - `getOne`: Fetches single workflow with nodes and connections
     - Includes related nodes and connections
@@ -449,6 +458,7 @@ app/(dashboard)/(home)/workflows/
     - `useRemoveWorkflow`: Deletes a workflow
     - `useSuspenseWorkflow`: Fetches a single workflow by ID
     - `useUpdateWorkflowName`: Updates a workflow's name
+    - `useUpdateWorkflow`: Saves workflow nodes and edges
   - `use-workflows-params.ts`: URL state management for search/pagination params
 - **Params Configuration** (`features/workflows/params.ts`): Defines URL search params with nuqs
 - **Prefetch Helper** (`features/workflows/server/prefetch.ts`): Server-side data preloading for SSR (prefetchWorkflows, prefetchWorkflow)
@@ -643,6 +653,30 @@ export const nodeComponents = {
 - `BaseExecutionNode`: Base component for execution nodes (target and source handles)
 - `ManualTriggerNode`: Manual trigger implementation (extends BaseTriggerNode)
 - `HttpRequestNode`: HTTP request node implementation (extends BaseExecutionNode)
+
+**Node Status Indicator** (`components/react-flow/node-status-indicator.tsx`):
+- Visual feedback component for node execution states
+- Status types: `loading`, `success`, `error`, `initial`
+- Variants:
+  - `overlay`: Full overlay with spinner animation (SpinnerLoadingIndicator)
+  - `border`: Animated rotating border (BorderLoadingIndicator)
+- Status borders: Blue for loading, green for success, red for error
+- Used by `BaseTriggerNode` and `BaseExecutionNode` to wrap content
+
+**Node Dialog Components:**
+- `HttpRequestDialog`: Configuration dialog for HTTP Request nodes
+  - Form fields: method (GET/POST/PUT/PATCH/DELETE), endpoint URL, request body
+  - Body field conditionally shown for POST/PUT/PATCH methods
+  - Supports template variables: `{{variables}}` and `{{json variable}}`
+  - Uses React Hook Form with Zod validation
+- `ManualTriggerDialog`: Information dialog for Manual Trigger nodes
+  - No configuration options (just displays informational message)
+
+**Editor State Management** (`features/editor/store/atoms.ts`):
+- Uses Jotai for lightweight atomic state
+- `editorAtom`: Stores ReactFlowInstance for accessing flow methods
+  - Used by EditorSaveButton to get current nodes/edges via `getNodes()` and `getEdges()`
+  - Set via `onInit` callback in Editor component
 
 **Node Selector Component** (`components/node-selector.tsx`):
 - Sheet-based UI for selecting and adding new nodes to workflows

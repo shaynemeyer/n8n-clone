@@ -44,9 +44,14 @@ graph TB
         Error[EditorError]
     end
 
+    subgraph "State Management"
+        EditorAtom[editorAtom - Jotai]
+    end
+
     subgraph "Data Layer"
         Hook[useSuspenseWorkflow]
         UpdateHook[useUpdateWorkflowName]
+        SaveHook[useUpdateWorkflow]
         Router[workflowsRouter]
         Prefetch[prefetchWorkflow]
     end
@@ -61,7 +66,11 @@ graph TB
     NameInput --> Hook
     NameInput --> UpdateHook
     Editor --> Hook
+    Editor --> EditorAtom
+    SaveButton --> EditorAtom
+    SaveButton --> SaveHook
     Hook --> Router
+    SaveHook --> Router
     Page --> Prefetch
     Prefetch --> Router
 
@@ -79,7 +88,9 @@ graph TB
 | **EditorHeader** | `features/editor/components/editor-header.tsx` | Header with breadcrumbs and save button |
 | **EditorBreadcrumbs** | `features/editor/components/editor-header.tsx` | Navigation breadcrumbs |
 | **EditorNameInput** | `features/editor/components/editor-header.tsx` | Inline workflow name editor |
-| **EditorSaveButton** | `features/editor/components/editor-header.tsx` | Save workflow button (placeholder) |
+| **EditorSaveButton** | `features/editor/components/editor-header.tsx` | Save workflow button using Jotai state |
+| **editorAtom** | `features/editor/store/atoms.ts` | Jotai atom storing ReactFlowInstance |
+| **useUpdateWorkflow** | `features/workflows/hooks/use-workflows.ts` | Save workflow nodes and edges hook |
 | **Editor** | `features/editor/components/editor.tsx` | Main editor component |
 | **EditorLoading** | `features/editor/components/editor.tsx` | Loading state component |
 | **EditorError** | `features/editor/components/editor.tsx` | Error state component |
@@ -97,14 +108,17 @@ The editor feature is organized under the `features/editor/` directory:
 features/editor/
 ├── components/
 │   ├── editor-header.tsx      # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
-│   └── editor.tsx             # Editor, EditorLoading, EditorError
+│   ├── editor.tsx             # Editor, EditorLoading, EditorError
+│   └── add-node-button.tsx    # AddNodeButton component
+└── store/
+    └── atoms.ts               # Jotai atoms (editorAtom for ReactFlowInstance)
 
 features/workflows/
 ├── hooks/
-│   └── use-workflows.ts       # useSuspenseWorkflow, useUpdateWorkflowName
+│   └── use-workflows.ts       # useSuspenseWorkflow, useUpdateWorkflowName, useUpdateWorkflow
 └── server/
     ├── prefetch.ts            # prefetchWorkflow
-    └── routers.ts             # getOne, updateName procedures
+    └── routers.ts             # getOne, updateName, update procedures
 
 app/(dashboard)/(editor)/workflows/[workflowId]/
 └── page.tsx                   # WorkflowDetailPage
@@ -343,20 +357,53 @@ sequenceDiagram
 
 ### EditorSaveButton
 
-Save button for workflow changes (placeholder for future implementation).
+Save button that persists workflow nodes and edges to the database.
 
 **File:** `features/editor/components/editor-header.tsx`
 
 ```typescript
 import { Button } from '@/components/ui/button';
 import { SaveIcon } from 'lucide-react';
+import { useAtomValue } from 'jotai';
+import { editorAtom } from '../store/atoms';
+import { useUpdateWorkflow } from '@/features/workflows/hooks/use-workflows';
 
 export function EditorSaveButton({ workflowId }: { workflowId: string }) {
+  const editor = useAtomValue(editorAtom);
+  const updateWorkflow = useUpdateWorkflow();
+
+  const handleSave = () => {
+    if (!editor) return;
+
+    const nodes = editor.getNodes();
+    const edges = editor.getEdges();
+
+    updateWorkflow.mutate({
+      id: workflowId,
+      nodes: nodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: node.data,
+      })),
+      edges: edges.map((edge) => ({
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
+      })),
+    });
+  };
+
   return (
     <div className="ml-auto">
-      <Button size="sm" onClick={() => {}} disabled={false}>
+      <Button
+        size="sm"
+        onClick={handleSave}
+        disabled={updateWorkflow.isPending || !editor}
+      >
         <SaveIcon className="size-4" />
-        Save
+        {updateWorkflow.isPending ? 'Saving...' : 'Save'}
       </Button>
     </div>
   );
@@ -367,10 +414,44 @@ export function EditorSaveButton({ workflowId }: { workflowId: string }) {
 - `workflowId`: Workflow ID from route params
 
 **Features:**
-- Save icon from lucide-react
-- Small button size
-- Positioned at right end with `ml-auto`
-- Currently placeholder implementation
+- Reads ReactFlowInstance from `editorAtom` (Jotai)
+- Uses `useUpdateWorkflow` hook for persistence
+- Extracts nodes and edges from the flow instance
+- Disabled during save or when editor not initialized
+- Shows "Saving..." state during mutation
+- Invalidates cache on success for consistent data
+
+**Save Workflow Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Button as EditorSaveButton
+    participant Atom as editorAtom
+    participant Hook as useUpdateWorkflow
+    participant Router as workflowsRouter
+    participant DB as Database
+    participant Cache as React Query
+
+    User->>Button: Click "Save"
+    Button->>Atom: useAtomValue(editorAtom)
+    Atom-->>Button: ReactFlowInstance
+    Button->>Button: editor.getNodes()
+    Button->>Button: editor.getEdges()
+    Button->>Hook: mutate({ id, nodes, edges })
+    Hook->>Router: update({ id, nodes, edges })
+    Router->>DB: BEGIN TRANSACTION
+    Router->>DB: DELETE FROM Node WHERE workflowId = ?
+    Router->>DB: INSERT INTO Node (multiple)
+    Router->>DB: INSERT INTO Connection (multiple)
+    Router->>DB: UPDATE Workflow SET updatedAt = NOW()
+    Router->>DB: COMMIT
+    DB-->>Router: Success
+    Router-->>Hook: Success
+    Hook->>Cache: Invalidate getMany & getOne
+    Hook-->>Button: Success
+    Button-->>User: Show success toast
+```
 
 ### Editor
 
@@ -392,16 +473,19 @@ import {
   type NodeChange,
   type EdgeChange,
   type Connection,
+  type ReactFlowInstance,
   Background,
   Controls,
   MiniMap,
   Panel,
 } from '@xyflow/react';
+import { useSetAtom } from 'jotai';
 import { useSuspenseWorkflow } from '@/features/workflows/hooks/use-workflows';
 import { ErrorView, LoadingView } from '@/components/entity-components';
 import '@xyflow/react/dist/style.css';
 import { nodeComponents } from '@/config/node-components';
 import { AddNodeButton } from './add-node-button';
+import { editorAtom } from '../store/atoms';
 
 export function EditorLoading() {
   return <LoadingView message="Loading editor..." />;
@@ -413,6 +497,7 @@ export function EditorError() {
 
 function Editor({ workflowId }: { workflowId: string }) {
   const { data: workflow } = useSuspenseWorkflow(workflowId);
+  const setEditor = useSetAtom(editorAtom);
 
   const [nodes, setNodes] = useState<Node[]>(workflow.nodes);
   const [edges, setEdges] = useState<Edge[]>(workflow.edges);
@@ -433,6 +518,13 @@ function Editor({ workflowId }: { workflowId: string }) {
     []
   );
 
+  const onInit = useCallback(
+    (instance: ReactFlowInstance) => {
+      setEditor(instance);
+    },
+    [setEditor]
+  );
+
   return (
     <div className="size-full">
       <ReactFlow
@@ -441,6 +533,7 @@ function Editor({ workflowId }: { workflowId: string }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onInit={onInit}
         nodeTypes={nodeComponents}
         fitView
       >
@@ -465,6 +558,7 @@ export default Editor;
 - **React Flow Integration**: Full-featured workflow canvas with node-based editing
 - **Node Management**: Add, move, and connect nodes visually
 - **State Management**: Local state for nodes and edges with React Flow's change handlers
+- **Jotai Integration**: Stores ReactFlowInstance in `editorAtom` via `onInit` callback
 - **Visual Components**:
   - `Background`: Grid background for the canvas
   - `Controls`: Zoom and fit view controls
@@ -1536,17 +1630,23 @@ The workflow canvas is now implemented with React Flow:
   - ✅ INITIAL (placeholder)
   - ✅ MANUAL_TRIGGER (trigger node)
   - ✅ HTTP_REQUEST (execution node)
-- 🔲 Node configuration panels (settings/double-click handlers)
-- 🔲 Node persistence (save nodes to database)
+- ✅ Node dialogs (HttpRequestDialog, ManualTriggerDialog)
+- ✅ Node status indicators (loading, success, error)
 - 🔲 Additional node types (Database, AI, Webhooks, etc.)
 
-### 2. Save Functionality
+### 2. Save Functionality ✅ (Complete)
 
-Implement the save button:
-- Auto-save on changes
-- Save indicator (saved/unsaved)
-- Keyboard shortcut (Cmd/Ctrl + S)
-- Version history
+The save button is now fully implemented:
+- ✅ Manual save via button click
+- ✅ Uses Jotai (`editorAtom`) to access ReactFlowInstance
+- ✅ Persists nodes and edges via `useUpdateWorkflow` hook
+- ✅ Transaction-based database updates
+- ✅ Cache invalidation for data consistency
+- ✅ Toast notifications on success/error
+- 🔲 Auto-save on changes
+- 🔲 Save indicator (saved/unsaved)
+- 🔲 Keyboard shortcut (Cmd/Ctrl + S)
+- 🔲 Version history
 
 ### 3. Collaboration
 

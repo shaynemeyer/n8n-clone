@@ -309,11 +309,11 @@ features/workflows/
 ├── components/
 │   └── workflows.tsx          # WorkflowsList, WorkflowsHeader, WorkflowsSearch, WorkflowsPagination, WorkflowsContainer
 ├── hooks/
-│   ├── use-workflows.ts       # useSuspenseWorkflows, useCreateWorkflow, useRemoveWorkflow, useSuspenseWorkflow, useUpdateWorkflowName
+│   ├── use-workflows.ts       # useSuspenseWorkflows, useCreateWorkflow, useRemoveWorkflow, useSuspenseWorkflow, useUpdateWorkflowName, useUpdateWorkflow
 │   └── use-workflows-params.ts # URL params management hook
 ├── params.ts                  # Search params configuration (nuqs)
 └── server/
-    ├── routers.ts             # workflowsRouter with CRUD operations + search/pagination
+    ├── routers.ts             # workflowsRouter with CRUD operations + update + search/pagination
     ├── prefetch.ts            # Server-side prefetch helper (prefetchWorkflows, prefetchWorkflow)
     └── params-loader.ts       # Server-side params loader
 
@@ -520,6 +520,7 @@ graph TB
 |-----------|------|-------|--------|---------------|
 | `create` | Mutation | None | `Workflow` | Yes |
 | `remove` | Mutation | `{ id: string }` | `Workflow` | Yes |
+| `update` | Mutation | `{ id: string, nodes: Node[], edges: Edge[] }` | `Workflow` | Yes |
 | `updateName` | Mutation | `{ id: string, name: string }` | `Workflow` | Yes |
 | `getOne` | Query | `{ id: string }` | `Workflow \| null` | Yes |
 | `getMany` | Query | `{ page?: number, pageSize?: number, search?: string }` | `PaginatedWorkflows` | Yes |
@@ -809,6 +810,29 @@ export const useUpdateWorkflowName = () => {
       },
       onError: (error) => {
         toast.error(`Failed to update workflow: ${error.message}`);
+      },
+    })
+  );
+};
+
+/**
+ * Hook to update a workflow (nodes and edges)
+ */
+export const useUpdateWorkflow = () => {
+  const queryClient = useQueryClient();
+  const trpc = useTRPC();
+
+  return useMutation(
+    trpc.workflows.update.mutationOptions({
+      onSuccess: (data) => {
+        toast.success(`Workflow "${data.name}" saved.`);
+        queryClient.invalidateQueries(trpc.workflows.getMany.queryOptions({}));
+        queryClient.invalidateQueries(
+          trpc.workflows.getOne.queryOptions({ id: data.id })
+        );
+      },
+      onError: (error) => {
+        toast.error(`Failed to save workflow: ${error.message}`);
       },
     })
   );
