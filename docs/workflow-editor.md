@@ -12,6 +12,9 @@ The Workflow Editor is a dedicated interface for editing and managing individual
 4. [Data Fetching](#data-fetching)
 5. [Implementation Details](#implementation-details)
 6. [Best Practices](#best-practices)
+7. [Workflow Execution](#workflow-execution)
+8. [Node Executor System](#node-executor-system)
+9. [Inngest Workflow Execution](#inngest-workflow-execution)
 
 ---
 
@@ -96,7 +99,11 @@ graph TB
 | **EditorError** | `features/editor/components/editor.tsx` | Error state component |
 | **useSuspenseWorkflow** | `features/workflows/hooks/use-workflows.ts` | Fetch single workflow hook |
 | **useUpdateWorkflowName** | `features/workflows/hooks/use-workflows.ts` | Update workflow name hook |
+| **useExecuteWorkflow** | `features/workflows/hooks/use-workflows.ts` | Execute workflow hook |
 | **prefetchWorkflow** | `features/workflows/server/prefetch.ts` | Server-side prefetch helper |
+| **ExecuteWorkflowButton** | `features/editor/components/execute-workflow-button.tsx` | Trigger workflow execution |
+| **executorRegistry** | `features/executions/lib/executor-registry.ts` | Node type to executor mapping |
+| **topologicalSort** | `inngest/utils.ts` | Sort nodes by dependencies |
 
 ---
 
@@ -107,11 +114,30 @@ The editor feature is organized under the `features/editor/` directory:
 ```
 features/editor/
 ├── components/
-│   ├── editor-header.tsx      # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
-│   ├── editor.tsx             # Editor, EditorLoading, EditorError
-│   └── add-node-button.tsx    # AddNodeButton component
+│   ├── editor-header.tsx           # EditorHeader, EditorBreadcrumbs, EditorNameInput, EditorSaveButton
+│   ├── editor.tsx                  # Editor, EditorLoading, EditorError
+│   ├── add-node-button.tsx         # AddNodeButton component
+│   └── execute-workflow-button.tsx # ExecuteWorkflowButton component
 └── store/
-    └── atoms.ts               # Jotai atoms (editorAtom for ReactFlowInstance)
+    └── atoms.ts                    # Jotai atoms (editorAtom for ReactFlowInstance)
+
+features/executions/
+├── components/
+│   └── http-request/
+│       └── executor.ts             # HTTP Request node executor
+├── lib/
+│   └── executor-registry.ts        # Node type to executor mapping
+└── types.ts                        # NodeExecutor, WorkflowContext types
+
+features/triggers/
+└── components/
+    └── manual-trigger/
+        └── executor.ts             # Manual Trigger node executor
+
+inngest/
+├── client.ts                       # Inngest client instance
+├── functions.ts                    # executeWorkflow function
+└── utils.ts                        # topologicalSort utility
 
 features/workflows/
 ├── hooks/
@@ -1663,6 +1689,368 @@ Add a toolbar with common actions:
 - Zoom controls
 - Layout options
 - Export workflow
+
+---
+
+## Workflow Execution
+
+The editor includes workflow execution functionality that triggers background job processing via Inngest.
+
+### Execute Workflow Button
+
+**File:** `features/editor/components/execute-workflow-button.tsx`
+
+```typescript
+import { Button } from '@/components/ui/button';
+import { useExecuteWorkflow } from '@/features/workflows/hooks/use-workflows';
+import { FlaskConicalIcon } from 'lucide-react';
+
+export const ExecuteWorkflowbutton = ({
+  workflowId,
+}: {
+  workflowId: string;
+}) => {
+  const executeWorkflow = useExecuteWorkflow();
+
+  const handleExecute = () => {
+    executeWorkflow.mutate({ id: workflowId });
+  };
+
+  return (
+    <Button
+      size="lg"
+      onClick={handleExecute}
+      disabled={executeWorkflow.isPending}
+    >
+      <FlaskConicalIcon className="size-4" />
+      Execute workflow
+    </Button>
+  );
+};
+```
+
+**Features:**
+- Triggers workflow execution via tRPC mutation
+- Sends event to Inngest for background processing
+- Disabled while execution is pending
+- Flask icon to indicate testing/execution
+
+### useExecuteWorkflow Hook
+
+**File:** `features/workflows/hooks/use-workflows.ts`
+
+```typescript
+/**
+ * Hook to execute a workflow
+ */
+export const useExecuteWorkflow = () => {
+  const trpc = useTRPC();
+
+  return useMutation(
+    trpc.workflows.execute.mutationOptions({
+      onSuccess: (data) => {
+        toast.success(`Workflow "${data.name}" executed.`);
+      },
+      onError: (error) => {
+        toast.error(`Failed to execute workflow: ${error.message}`);
+      },
+    })
+  );
+};
+```
+
+### Execute tRPC Procedure
+
+**File:** `features/workflows/server/routers.ts`
+
+```typescript
+execute: protectedProcedure
+  .input(z.object({ id: z.string() }))
+  .mutation(async ({ input, ctx }) => {
+    const workflow = await prisma.workflow.findFirstOrThrow({
+      where: {
+        id: input.id,
+        userId: ctx.auth.user.id,
+      },
+    });
+
+    await inngest.send({
+      name: 'workflow/execute.workflow',
+      data: { workflowId: input.id },
+    });
+
+    return workflow;
+  }),
+```
+
+**Features:**
+- Validates workflow ownership
+- Sends event to Inngest for asynchronous execution
+- Returns workflow data for UI feedback
+
+---
+
+## Node Executor System
+
+The application uses an executor registry pattern to handle node execution during workflow runs.
+
+### Executor Types
+
+**File:** `features/executions/types.ts`
+
+```typescript
+import type { GetStepTools, Inngest } from 'inngest';
+
+export type WorkflowContext = Record<string, unknown>;
+
+export type StepTools = GetStepTools<Inngest.Any>;
+
+export interface NodeExecutorParams<TData = Record<string, unknown>> {
+  data: TData;
+  nodeId: string;
+  context: WorkflowContext;
+  step: StepTools;
+}
+
+export type NodeExecutor<TData = Record<string, unknown>> = (
+  params: NodeExecutorParams<TData>
+) => Promise<WorkflowContext>;
+```
+
+**Type Definitions:**
+- `WorkflowContext`: Shared state passed between nodes
+- `StepTools`: Inngest step functions for reliable execution
+- `NodeExecutorParams`: Parameters passed to each node executor
+- `NodeExecutor`: Function signature for all node executors
+
+### Executor Registry
+
+**File:** `features/executions/lib/executor-registry.ts`
+
+```typescript
+import { NodeType } from '@/lib/generated/prisma/enums';
+import { NodeExecutor } from '../types';
+import { manualTriggerExecutor } from '@/features/triggers/components/manual-trigger/executor';
+import { httpRequestExecutor } from '../components/http-request/executor';
+
+export const executorRegistry: Record<NodeType, NodeExecutor> = {
+  [NodeType.MANUAL_TRIGGER]: manualTriggerExecutor,
+  [NodeType.INITIAL]: manualTriggerExecutor,
+  [NodeType.HTTP_REQUEST]: httpRequestExecutor,
+};
+
+export const getExecutor = (type: NodeType): NodeExecutor => {
+  const executor = executorRegistry[type];
+
+  if (!executor) {
+    throw new Error(`No executor found for node type: ${type}`);
+  }
+
+  return executor;
+};
+```
+
+**Features:**
+- Maps NodeType enum to executor functions
+- `getExecutor` helper for type-safe executor lookup
+- Throws descriptive error for unregistered node types
+
+### Manual Trigger Executor
+
+**File:** `features/triggers/components/manual-trigger/executor.ts`
+
+```typescript
+import type { NodeExecutor } from '@/features/executions/types';
+
+type ManualTriggerData = Record<string, unknown>;
+
+export const manualTriggerExecutor: NodeExecutor<ManualTriggerData> = async ({
+  nodeId,
+  context,
+  step,
+}) => {
+  const result = await step.run('manual-trigger', async () => context);
+  return result;
+};
+```
+
+### HTTP Request Executor
+
+**File:** `features/executions/components/http-request/executor.ts`
+
+```typescript
+import type { NodeExecutor } from '@/features/executions/types';
+
+type HttpRequestData = Record<string, unknown>;
+
+export const httpRequestExecutor: NodeExecutor<HttpRequestData> = async ({
+  nodeId,
+  context,
+  step,
+}) => {
+  const result = await step.run('http-request', async () => context);
+  return result;
+};
+```
+
+**Note:** These executors are currently placeholder implementations. Future versions will include actual HTTP request logic and state publishing for real-time UI updates.
+
+---
+
+## Inngest Workflow Execution
+
+The workflow execution is handled by an Inngest function that orchestrates node execution in topological order.
+
+### Execute Workflow Function
+
+**File:** `inngest/functions.ts`
+
+```typescript
+import { NonRetriableError } from 'inngest';
+import { inngest } from './client';
+import prisma from '@/lib/db';
+import { topologicalSort } from './utils';
+import { getExecutor } from '@/features/executions/lib/executor-registry';
+import { NodeType } from '@/lib/generated/prisma/enums';
+
+export const executeWorkflow = inngest.createFunction(
+  { id: 'execute-workflow' },
+  { event: 'workflow/execute.workflow' },
+  async ({ event, step }) => {
+    const workflowId = event.data.workflowId;
+
+    if (!workflowId) {
+      throw new NonRetriableError('Workflow ID is missing');
+    }
+
+    const sortedNodes = await step.run('prepare-workflow', async () => {
+      const workflow = await prisma.workflow.findUniqueOrThrow({
+        where: { id: workflowId },
+        include: {
+          nodes: true,
+          connections: true,
+        },
+      });
+      return topologicalSort(workflow.nodes, workflow.connections);
+    });
+
+    // Initialize the context with any initial data from the trigger
+    let context = event.data.initialData || {};
+
+    // Execute each node in order
+    for (const node of sortedNodes) {
+      const executor = getExecutor(node.type as NodeType);
+      context = await executor({
+        data: node.data as Record<string, unknown>,
+        nodeId: node.id,
+        context,
+        step,
+      });
+    }
+
+    return {
+      workflowId,
+      result: context,
+    };
+  }
+);
+```
+
+**Execution Flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Button as ExecuteWorkflowButton
+    participant tRPC as workflowsRouter
+    participant Inngest
+    participant Function as executeWorkflow
+    participant DB as Database
+    participant Executor as Node Executors
+
+    User->>Button: Click "Execute workflow"
+    Button->>tRPC: execute({ id })
+    tRPC->>tRPC: Validate ownership
+    tRPC->>Inngest: send('workflow/execute.workflow')
+    tRPC-->>Button: Success
+    Button-->>User: Toast "Workflow executed"
+
+    Note over Inngest: Async processing begins
+
+    Inngest->>Function: Trigger executeWorkflow
+    Function->>DB: Fetch workflow with nodes & connections
+    DB-->>Function: Workflow data
+    Function->>Function: topologicalSort(nodes, connections)
+
+    loop For each node in sorted order
+        Function->>Executor: getExecutor(node.type)
+        Executor->>Executor: Execute node logic
+        Executor-->>Function: Updated context
+    end
+
+    Function-->>Inngest: { workflowId, result }
+```
+
+### Topological Sort Utility
+
+**File:** `inngest/utils.ts`
+
+```typescript
+import toposort from 'toposort';
+import { Connection, Node } from '@/lib/generated/prisma/client';
+
+export const topologicalSort = (
+  nodes: Node[],
+  connections: Connection[]
+): Node[] => {
+  // If no connections, return nodes as-is
+  if (connections.length === 0) {
+    return nodes;
+  }
+
+  // Create edges array for toposort
+  const edges: [string, string][] = connections.map((conn) => [
+    conn.fromNodeId,
+    conn.toNodeId,
+  ]);
+
+  // Add nodes with no connections as self-edges
+  const connectedNodeIds = new Set<string>();
+  for (const conn of connections) {
+    connectedNodeIds.add(conn.fromNodeId);
+    connectedNodeIds.add(conn.toNodeId);
+  }
+
+  for (const node of nodes) {
+    if (!connectedNodeIds.has(node.id)) {
+      edges.push([node.id, node.id]);
+    }
+  }
+
+  // Perform topological sort
+  let sortedNodeIds: string[];
+
+  try {
+    sortedNodeIds = toposort(edges);
+    sortedNodeIds = [...new Set(sortedNodeIds)]; // Remove duplicates
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Cyclic')) {
+      throw new Error('Workflow contains a cycle');
+    }
+    throw error;
+  }
+
+  // Map sorted IDs back to node objects
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  return sortedNodeIds.map((id) => nodeMap.get(id)!).filter(Boolean);
+};
+```
+
+**Features:**
+- Uses `toposort` library for dependency-based ordering
+- Handles disconnected nodes (nodes with no connections)
+- Detects and throws error for cyclic dependencies
+- Returns nodes in execution order (dependencies first)
 
 ---
 
