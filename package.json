@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "inngest:dev": "inngest-cli dev"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.43",
@@ -73,6 +74,7 @@
     "sonner": "^2.0.7",
     "superjson": "^2.2.5",
     "tailwind-merge": "^3.3.1",
+    "toposort": "^2.0.2",
     "vaul": "^1.1.2",
     "zod": "^4.1.12"
   },
@@ -82,6 +84,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/toposort": "^2.0.7",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
     "inngest-cli": "^1.13.4",
